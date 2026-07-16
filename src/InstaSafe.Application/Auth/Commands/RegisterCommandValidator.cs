@@ -1,0 +1,26 @@
+using FluentValidation;
+
+namespace InstaSafe.Application.Auth.Commands;
+
+public class RegisterCommandValidator : AbstractValidator<RegisterCommand>
+{
+    public RegisterCommandValidator()
+    {
+        RuleFor(v => v.FirstName)
+            .NotEmpty().WithMessage("First name is required.")
+            .MaximumLength(100);
+
+        RuleFor(v => v.LastName)
+            .NotEmpty().WithMessage("Last name is required.")
+            .MaximumLength(100);
+
+        RuleFor(v => v.Email)
+            .NotEmpty().WithMessage("Email is required.")
+            .EmailAddress().WithMessage("Invalid email format.")
+            .MaximumLength(256);
+
+        RuleFor(v => v.Password)
+            .NotEmpty().WithMessage("Password is required.")
+            .MinimumLength(8).WithMessage("Password must be at least 8 characters.");
+    }
+}

@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/InstaSafe.Domain/InstaSafe.Domain.csproj" />
+    <Project Path="src/InstaSafe.Application/InstaSafe.Application.csproj" />
+    <Project Path="src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj" />
+    <Project Path="src/InstaSafe.Api/InstaSafe.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/InstaSafe.Domain.UnitTests/InstaSafe.Domain.UnitTests.csproj" />
+    <Project Path="tests/InstaSafe.Application.UnitTests/InstaSafe.Application.UnitTests.csproj" />
+    <Project Path="tests/InstaSafe.Api.IntegrationTests/InstaSafe.Api.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

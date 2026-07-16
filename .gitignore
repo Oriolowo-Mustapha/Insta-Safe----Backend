@@ -1,0 +1,49 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Visual Studio
+.vs/
+*.rsuser
+launchSettings.json
+
+## Rider
+.idea/
+
+## Secrets
+**/appsettings.Development.json
+**/appsettings.json
+
+## User secrets
+secrets.json
+
+## Logs
+Logs/
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+build/
+
+## NuGet
+*.nupkg
+**/packages/*
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## Misc
+*.swp
+*.bak
+*.tmp
