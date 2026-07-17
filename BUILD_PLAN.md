@@ -1,6 +1,6 @@
 # InstaSafe — Build Plan & Progress Tracker
 
-**Stack:** .NET 10, Clean Architecture + CQRS (MediatR), EF Core 10 (SQL Server), Hangfire, ALATPay
+**Stack:** .NET 10, Clean Architecture + CQRS (MediatR), EF Core 10 (PostgreSQL), Hangfire, Monnify
 
 ---
 
@@ -31,7 +31,7 @@
 
 | # | Task | Files | Status |
 |   |---|------|-------|--------|
-| 0.8 | Create validators for `ProcessAlatPayWebhookCommand` | `Application/Payments/Commands/ProcessAlatPayWebhook/` | ✅ |
+| 0.8 | Create validators for `ProcessMonnifyWebhookCommand` | `Application/Payments/Commands/ProcessMonnifyWebhook/` | ✅ |
 | 0.9 | Create `OrderFundedEventHandler` (log + notify) | `Application/Orders/Events/` | ✅ |
 | 0.10 | Create stub handlers for all 9 domain events | `Application/**/Events/` | ✅ |
 
@@ -42,14 +42,14 @@
 | # | Task | Layer | Status |
 |---|------|-------|--------|
 | 1.1 | `CreateOrderCommand` + Handler + Validator | Application | ✅ |
-| 1.2 | `GenerateEscrowLinkCommand` + Handler — calls `IAlatPayClient.GenerateVirtualAccountAsync` with **Virtual Account Name Enquiry** pre-check before returning VA to buyer | Application | ✅ |
-| 1.3 | `InitiateCardPaymentCommand` + Handler — validates card, gets `transactionId` via `IAlatPayClient.InitiateCardPaymentAsync` | Application | ✅ |
+| 1.2 | `GenerateEscrowLinkCommand` + Handler — calls `IMonnifyClient.GenerateVirtualAccountAsync` with **Virtual Account Name Enquiry** pre-check before returning VA to buyer | Application | ✅ |
+| 1.3 | `InitiateCardPaymentCommand` + Handler — validates card, gets `transactionId` via `IMonnifyClient.InitiateCardPaymentAsync` | Application | ✅ |
 | 1.4 | `AuthenticateCardPaymentCommand` + Handler — sends 3DS/OTP using transactionId from initiation | Application | ✅ |
-| 1.5 | `InitiateBankAccountDebitCommand` + Handler — direct debit with OTP consent flow via ALATPay | Application | ✅ |
+| 1.5 | `InitiateBankAccountDebitCommand` + Handler — direct debit with OTP consent flow via Monnify | Application | ✅ |
 | 1.6 | `GetOrderByIdQuery` + Handler | Application | ✅ |
 | 1.7 | `GetMerchantOrdersQuery` + Handler (paginated, filtered by status) | Application | ✅ |
 | 1.8 | `GetOrderTimelineQuery` + Handler (ordered audit trail for an order) | Application | ✅ |
-| 1.9 | `VerifyTransactionStatusQuery` + Handler (calls ALATPay status check) | Application | ✅ |
+| 1.9 | `VerifyTransactionStatusQuery` + Handler (calls Monnify status check) | Application | ✅ |
 | 1.10 | Orders controller (`/api/orders`) | Api/Controllers | ✅ |
 | 1.11 | Merchants controller (`/api/merchants`) | Api/Controllers | ✅ |
 | 1.12 | Buyers controller (`/api/buyers`) | Api/Controllers | ✅ |
@@ -101,7 +101,7 @@
 |---|------|-------|--------|
 | 5.1 | Add project references + mock packages (NSubstitute) to all test projects | Tests | ⬜ |
 | 5.2 | Domain unit tests: state machine transitions, entity invariants | Domain.Tests | ⬜ |
-| 5.3 | Application unit tests: `ProcessAlatPayWebhookHandler` (success, duplicate, malformed) | Application.Tests | ⬜ |
+| 5.3 | Application unit tests: `ProcessMonnifyWebhookHandler` (success, duplicate, malformed) | Application.Tests | ⬜ |
 | 5.4 | Application unit tests: delivery scan handlers (session match, fingerprint mismatch, order mismatch) | Application.Tests | ⬜ |
 | 5.5 | Application unit tests: dispute/payout handlers | Application.Tests | ⬜ |
 | 5.6 | Integration tests: full escrow lifecycle via `WebApplicationFactory` | Integration.Tests | ⬜ |
@@ -165,7 +165,7 @@ src/InstaSafe.Api/
 │   └── DisputesController.cs      # Phase 3
 ├── Options/
 │   ├── JwtSettings.cs             # Phase 0
-│   └── AlatPayOptions.cs          # Phase 0 (in Infrastructure)
+│   └── MonnifyOptions.cs          # Phase 0 (in Infrastructure)
 ├── Middleware/
 │   └── ExceptionHandlingMiddleware.cs  # Phase 0
 └── Services/
@@ -187,7 +187,7 @@ src/InstaSafe.Application/
 │       ├── InitiateCardPayment/   # Phase 1
 │       ├── AuthenticateCardPayment/ # Phase 1
 │       ├── InitiateBankAccountDebit/ # Phase 1
-│       └── ProcessAlatPayWebhook/  # Phase 0
+│       └── ProcessMonnifyWebhook/  # Phase 0
 ├── Delivery/
 │   ├── Commands/
 │   │   ├── GenerateDeliveryQrCodes/ # Phase 2
@@ -228,7 +228,7 @@ src/InstaSafe.Infrastructure/
 │   ├── QrTokenService.cs          # Phase 2
 │   └── FingerprintMatcher.cs      # Phase 2
 ├── ExternalServices/
-│   └── AlatPay/                   # Phase 0
+│   └── Monnify/                   # Phase 0
 └── BackgroundJobs/
     ├── EscrowAutoReleaseJob.cs    # Phase 4
     ├── VirtualAccountExpiryJob.cs # Phase 4
@@ -250,6 +250,6 @@ src/InstaSafe.Infrastructure/
 | Phase 6 — Frontend | ⬜ Not Started |
 | Phase 7 — Polish & Demo | ⬜ Not Started |
 
-**What's built (pre-existing):** Domain entities/enums/events, EF Core + entity configs, ALATPay client, webhook handler command, CQRS pipeline, exception middleware, DI wiring.
+**What's built (pre-existing):** Domain entities/enums/events, EF Core + entity configs, Monnify client, webhook handler command, CQRS pipeline, exception middleware, DI wiring.
 
 **What we built:** Phase 0 JWT auth (Identity + Bearer), `IJwtTokenGenerator` extracted service, `JwtSettings` options, Auth/Webhook controllers. Phase 1 full CQRS (5 commands + 4 queries + validators + 3 controllers). Phase 2 QR Delivery (QrTokenService, FingerprintMatcher, 3 commands + 1 query + validators + 1 controller). Phase 3 Dispute & Payout (RaiseDispute, ResolveDispute with refund/release branching, ExecuteSplitPayout with commission calc, GetDispute/GetOrderDisputes queries, DisputesController, EscrowReleased/OrderRefunded event handlers). Phase 4 Background Jobs (Escrow auto-release, Virtual Account expiry, Delivery session expiry, Hangfire dashboard wiring). All code compiles — `dotnet build` passes with 0 errors.

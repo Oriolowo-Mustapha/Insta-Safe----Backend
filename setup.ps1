@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-Set-Location "C:\Users\MUSTAPHA\source\repos\Instasafe -- Backend"
+Set-Location "C:\Users\Adeyemi Mubarak\Desktop\DEV-I\Hackathon\Insta\Insta-Safe----Backend"
 
 dotnet new classlib -n InstaSafe.Domain -o src/InstaSafe.Domain --framework net10.0
 dotnet new classlib -n InstaSafe.Application -o src/InstaSafe.Application --framework net10.0
@@ -45,10 +45,10 @@ dotnet add src/InstaSafe.Application/InstaSafe.Application.csproj package Fluent
 dotnet add src/InstaSafe.Application/InstaSafe.Application.csproj package FluentValidation.DependencyInjectionExtensions
 dotnet add src/InstaSafe.Application/InstaSafe.Application.csproj package Microsoft.Extensions.DependencyInjection.Abstractions
 
-dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Microsoft.EntityFrameworkCore.SqlServer
+dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Npgsql.EntityFrameworkCore.PostgreSQL
 dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Microsoft.EntityFrameworkCore.Tools
 dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Hangfire.Core
-dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Hangfire.SqlServer
+dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Hangfire.PostgreSql
 dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Hangfire.AspNetCore
 dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Polly
 dotnet add src/InstaSafe.Infrastructure/InstaSafe.Infrastructure.csproj package Microsoft.Extensions.Http.Polly
