@@ -1,11 +1,11 @@
-using InstaSafe.Application.Payments.Commands.ProcessAlatPayWebhook;
+using InstaSafe.Application.Payments.Commands.ProcessMonnifyWebhook;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
 namespace InstaSafe.Api.Controllers;
 
 [ApiController]
-[Route("api/webhooks/alatpay")]
+[Route("api/webhooks/monnify")]
 public class WebhookController : ControllerBase
 {
     private readonly IMediator _mediator;
@@ -20,10 +20,20 @@ public class WebhookController : ControllerBase
     {
         using var reader = new StreamReader(Request.Body);
         var payload = await reader.ReadToEndAsync();
-        var signature = Request.Headers["x-alatpay-signature"].FirstOrDefault();
+        
+        // Monnify uses 'monnify-signature' header for webhook validation
+        var signature = Request.Headers["monnify-signature"].FirstOrDefault();
 
-        var command = new ProcessAlatPayWebhookCommand(payload, signature);
-        await _mediator.Send(command);
+        // If signature is null, the validator in the command will catch it
+        var command = new ProcessMonnifyWebhookCommand(payload, signature ?? string.Empty);
+        var result = await _mediator.Send(command);
+
+        if (!result.Succeeded)
+        {
+            // Returning Ok anyway is best practice for webhooks to avoid provider retries
+            // if it's our internal logic error, but we log the error.
+            return Ok(new { message = "Processed with warning/error", details = result.Errors });
+        }
 
         return Ok(new { message = "Received" });
     }

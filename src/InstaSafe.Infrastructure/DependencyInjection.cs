@@ -1,6 +1,8 @@
 using InstaSafe.Application.Common.Interfaces;
+using InstaSafe.Application.Common.Models.Monnify;
 using InstaSafe.Infrastructure.Delivery;
-using InstaSafe.Infrastructure.ExternalServices.AlatPay;
+
+using InstaSafe.Infrastructure.ExternalServices.Monnify;
 using InstaSafe.Infrastructure.Persistence;
 using InstaSafe.Infrastructure.Persistence.Repositories;
 using InstaSafe.Infrastructure.Services;
@@ -31,17 +33,11 @@ public static class DependencyInjection
         services.AddScoped<ICurrentUser, CurrentUserService>();
         services.AddHttpContextAccessor();
 
-        services.Configure<AlatPayOptions>(configuration.GetSection(AlatPayOptions.SectionName));
-
-        services.AddHttpClient<IAlatPayClient, AlatPayClient>((serviceProvider, client) =>
-        {
-            var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AlatPayOptions>>().Value;
-            client.BaseAddress = new Uri(options.BaseUrl);
-            client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", options.SubscriptionKey);
-            client.DefaultRequestHeaders.Add("Authorization", options.PrimaryKey);
-        })
-        .AddTransientHttpErrorPolicy(policyBuilder =>
-            policyBuilder.WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
+        services.Configure<MonnifyOptions>(configuration.GetSection(MonnifyOptions.SectionName));
+        services.AddMemoryCache();
+        services.AddHttpClient<IMonnifyPaymentService, MonnifyClient>()
+            .AddTransientHttpErrorPolicy(policyBuilder =>
+                policyBuilder.WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
 
         services.Configure<QrOptions>(configuration.GetSection(QrOptions.SectionName));
         services.AddScoped<IQrTokenService, QrTokenService>();

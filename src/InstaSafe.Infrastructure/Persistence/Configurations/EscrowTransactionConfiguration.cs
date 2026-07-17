@@ -8,10 +8,14 @@ public class EscrowTransactionConfiguration : IEntityTypeConfiguration<EscrowTra
 {
     public void Configure(EntityTypeBuilder<EscrowTransaction> builder)
     {
-        builder.Property(e => e.AlatPayTransactionId).HasMaxLength(200);
+        builder.Property(e => e.MonnifyTransactionReference)
+            .HasMaxLength(100);
+
+        builder.Property(e => e.CheckoutUrl)
+            .HasMaxLength(500);
         
         // Indexes
-        builder.HasIndex(e => e.AlatPayTransactionId).IsUnique().HasFilter("\"AlatPayTransactionId\" IS NOT NULL");
+        builder.HasIndex(e => e.MonnifyTransactionReference).IsUnique().HasFilter("\"MonnifyTransactionReference\" IS NOT NULL");
         
         builder.Property(e => e.TransactionReference).HasMaxLength(200);
         // This makes sure internal system refs are unique if provided

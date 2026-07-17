@@ -28,7 +28,7 @@ public class OrderFundedEventHandler : INotificationHandler<OrderFundedEvent>
     public async Task Handle(OrderFundedEvent notification, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Order {OrderId} funded. TxId: {TxId}", 
-            notification.OrderId, notification.AlatPayTransactionId);
+            notification.OrderId, notification.MonnifyTransactionReference);
 
         var order = await _context.Orders
             .Include(o => o.Merchant)
@@ -57,7 +57,7 @@ public class OrderFundedEventHandler : INotificationHandler<OrderFundedEvent>
             await _emailService.SendEmailAsync(
                 order.Buyer.Email,
                 "Payment Receipt",
-                $"<p>Your payment for <b>{order.ItemName}</b> was successful.</p><p>Transaction ID: {notification.AlatPayTransactionId}</p><p>The funds are now safely held in Escrow until you confirm delivery.</p>",
+                $"<p>Your payment for <b>{order.ItemName}</b> was successful.</p><p>Transaction ID: {notification.MonnifyTransactionReference}</p><p>The funds are now safely held in Escrow until you confirm delivery.</p>",
                 cancellationToken);
         }
     }

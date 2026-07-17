@@ -61,7 +61,7 @@ public class GetOrderByIdQueryHandler : IRequestHandler<GetOrderByIdQuery, Resul
             EscrowTransaction = order.EscrowTransaction != null
                 ? new EscrowTransactionInfo
                 {
-                    AlatPayTransactionId = order.EscrowTransaction.AlatPayTransactionId,
+                    MonnifyTransactionReference = order.EscrowTransaction.MonnifyTransactionReference,
                     Channel = order.EscrowTransaction.Channel.ToString(),
                     Amount = order.EscrowTransaction.Amount,
                     Status = order.EscrowTransaction.Status.ToString(),

@@ -9,7 +9,7 @@ public class Merchant : BaseEntity
     public required string BusinessName { get; set; }
     public required string Email { get; set; }
     public required string Phone { get; set; }
-    public string? AlatPayBusinessId { get; set; }
+    public string? MonnifySubAccountCode { get; set; }
     public string? PayoutBankAccount { get; set; }
     public string? PayoutBankCode { get; set; }
     public decimal CommissionRate { get; set; } = 0.05m;

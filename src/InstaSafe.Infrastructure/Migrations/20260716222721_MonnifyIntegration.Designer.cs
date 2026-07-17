@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace InstaSafe.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260711031508_InitialPostgresMigration")]
-    partial class InitialPostgresMigration
+    [Migration("20260716222721_MonnifyIntegration")]
+    partial class MonnifyIntegration
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -202,10 +202,6 @@ namespace InstaSafe.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<string>("AlatPayTransactionId")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
                     b.Property<decimal>("Amount")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
@@ -213,6 +209,10 @@ namespace InstaSafe.Infrastructure.Migrations
                     b.Property<string>("Channel")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<string>("CheckoutUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -233,6 +233,10 @@ namespace InstaSafe.Infrastructure.Migrations
 
                     b.Property<string>("LastModifiedBy")
                         .HasColumnType("text");
+
+                    b.Property<string>("MonnifyTransactionReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<Guid>("OrderId")
                         .HasColumnType("uuid");
@@ -264,9 +268,9 @@ namespace InstaSafe.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AlatPayTransactionId")
+                    b.HasIndex("MonnifyTransactionReference")
                         .IsUnique()
-                        .HasFilter("\"AlatPayTransactionId\" IS NOT NULL");
+                        .HasFilter("\"MonnifyTransactionReference\" IS NOT NULL");
 
                     b.HasIndex("OrderId")
                         .IsUnique();
@@ -321,10 +325,6 @@ namespace InstaSafe.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<string>("AlatPayBusinessId")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
                     b.Property<string>("BusinessName")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -353,6 +353,10 @@ namespace InstaSafe.Infrastructure.Migrations
 
                     b.Property<string>("LastModifiedBy")
                         .HasColumnType("text");
+
+                    b.Property<string>("MonnifySubAccountCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("PayoutBankAccount")
                         .HasMaxLength(20)

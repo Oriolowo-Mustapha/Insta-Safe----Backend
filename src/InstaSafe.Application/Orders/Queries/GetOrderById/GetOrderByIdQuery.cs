@@ -47,7 +47,7 @@ public class BuyerInfo
 
 public class EscrowTransactionInfo
 {
-    public string? AlatPayTransactionId { get; init; }
+    public string? MonnifyTransactionReference { get; init; }
     public string Channel { get; init; } = string.Empty;
     public decimal Amount { get; init; }
     public string Status { get; init; } = string.Empty;

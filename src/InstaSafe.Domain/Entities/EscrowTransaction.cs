@@ -6,7 +6,8 @@ namespace InstaSafe.Domain.Entities;
 public class EscrowTransaction : BaseEntity
 {
     public Guid OrderId { get; init; }
-    public string? AlatPayTransactionId { get; init; }
+    public string? MonnifyTransactionReference { get; init; }
+    public string? CheckoutUrl { get; set; }
     public string? TransactionReference { get; init; }
     public PaymentChannel Channel { get; init; }
     public decimal Amount { get; init; }

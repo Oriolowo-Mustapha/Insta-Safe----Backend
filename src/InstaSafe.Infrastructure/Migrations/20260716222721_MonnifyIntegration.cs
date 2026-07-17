@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace InstaSafe.Infrastructure.Migrations
 {
     /// <inheritdoc />
-    public partial class InitialPostgresMigration : Migration
+    public partial class MonnifyIntegration : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -127,7 +127,7 @@ namespace InstaSafe.Infrastructure.Migrations
                     BusinessName = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
                     Email = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
                     Phone = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
-                    AlatPayBusinessId = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
+                    MonnifySubAccountCode = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: true),
                     PayoutBankAccount = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: true),
                     PayoutBankCode = table.Column<string>(type: "character varying(10)", maxLength: 10, nullable: true),
                     CommissionRate = table.Column<decimal>(type: "numeric(5,4)", precision: 5, scale: 4, nullable: false),
@@ -290,7 +290,8 @@ namespace InstaSafe.Infrastructure.Migrations
                 {
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
                     OrderId = table.Column<Guid>(type: "uuid", nullable: false),
-                    AlatPayTransactionId = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
+                    MonnifyTransactionReference = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
+                    CheckoutUrl = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: true),
                     TransactionReference = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
                     Channel = table.Column<string>(type: "text", nullable: false),
                     Amount = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false),
@@ -371,11 +372,11 @@ namespace InstaSafe.Infrastructure.Migrations
                 column: "RaisedByBuyerId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_EscrowTransactions_AlatPayTransactionId",
+                name: "IX_EscrowTransactions_MonnifyTransactionReference",
                 table: "EscrowTransactions",
-                column: "AlatPayTransactionId",
+                column: "MonnifyTransactionReference",
                 unique: true,
-                filter: "\"AlatPayTransactionId\" IS NOT NULL");
+                filter: "\"MonnifyTransactionReference\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_EscrowTransactions_OrderId",

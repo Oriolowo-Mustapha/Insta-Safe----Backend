@@ -3,7 +3,6 @@ using InstaSafe.Application.Orders.Commands.CreateOrder;
 using InstaSafe.Application.Orders.Commands.GenerateEscrowLink;
 using InstaSafe.Application.Orders.Queries.GetOrderById;
 using InstaSafe.Application.Orders.Queries.GetOrderTimeline;
-using InstaSafe.Application.Orders.Queries.VerifyTransactionStatus;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -63,15 +62,7 @@ public class OrdersController : ControllerBase
             : NotFound(new { errors = result.Errors });
     }
 
-    [HttpGet("{orderId:guid}/verify")]
-    public async Task<IActionResult> VerifyTransactionStatus(Guid orderId)
-    {
-        var query = new VerifyTransactionStatusQuery(orderId);
-        var result = await _mediator.Send(query);
-        return result.Succeeded
-            ? Ok(result.Data)
-            : NotFound(new { errors = result.Errors });
-    }
+
 }
 
 public record GenerateEscrowLinkRequest(

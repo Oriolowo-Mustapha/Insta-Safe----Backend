@@ -13,7 +13,8 @@ public class MerchantConfiguration : IEntityTypeConfiguration<Merchant>
         builder.HasIndex(m => m.Email).IsUnique();
         builder.Property(m => m.Phone).HasMaxLength(20).IsRequired();
         builder.Property(m => m.CommissionRate).HasPrecision(5, 4);
-        builder.Property(m => m.AlatPayBusinessId).HasMaxLength(100);
+        builder.Property(m => m.MonnifySubAccountCode)
+            .HasMaxLength(50);
         builder.Property(m => m.PayoutBankAccount).HasMaxLength(20);
         builder.Property(m => m.PayoutBankCode).HasMaxLength(10);
     }

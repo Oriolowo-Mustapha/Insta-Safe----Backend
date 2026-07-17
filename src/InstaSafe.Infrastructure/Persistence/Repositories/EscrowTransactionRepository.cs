@@ -13,11 +13,16 @@ public class EscrowTransactionRepository : IEscrowTransactionRepository
         _context = context;
     }
 
-    public async Task<EscrowTransaction?> GetByAlatPayTransactionIdAsync(string transactionId, CancellationToken ct)
+    public async Task<EscrowTransaction?> GetByMonnifyTransactionReferenceAsync(string monnifyReference, CancellationToken ct)
     {
         return await _context.EscrowTransactions
-            .Include(e => e.Order)
-            .FirstOrDefaultAsync(e => e.AlatPayTransactionId == transactionId, ct);
+            .FirstOrDefaultAsync(e => e.MonnifyTransactionReference == monnifyReference, ct);
+    }
+
+    public async Task<EscrowTransaction?> GetByTransactionReferenceAsync(string transactionReference, CancellationToken ct)
+    {
+        return await _context.EscrowTransactions
+            .FirstOrDefaultAsync(e => e.TransactionReference == transactionReference, ct);
     }
 
     public void Add(EscrowTransaction transaction)
