@@ -127,4 +127,24 @@ public class MonnifyClient : IMonnifyPaymentService
         var req = await CreateRequestAsync(HttpMethod.Post, "/api/v1/refunds/initiate-refund", request, ct);
         return await SendAsync<RefundResponse>(req, ct);
     }
+
+    public async Task<MonnifyBaseResponse<BvnMatchResponse>> VerifyBvnAsync(BvnMatchRequest request, CancellationToken ct = default)
+    {
+        var req = await CreateRequestAsync(HttpMethod.Post, "/api/v1/vas/bvn-details-match", request, ct);
+        return await SendAsync<BvnMatchResponse>(req, ct);
+    }
+
+    public async Task<MonnifyBaseResponse<NinVerificationResponse>> VerifyNinAsync(NinVerificationRequest request, CancellationToken ct = default)
+    {
+        var req = await CreateRequestAsync(HttpMethod.Post, "/api/v1/vas/nin-details", request, ct);
+        return await SendAsync<NinVerificationResponse>(req, ct);
+    }
+
+    public async Task<MonnifyBaseResponse<AccountVerificationResponse>> VerifyAccountAsync(string accountNumber, string bankCode, CancellationToken ct = default)
+    {
+        // For GET requests, query parameters are appended to the URL
+        var path = $"/api/v1/disbursements/account/validate?accountNumber={accountNumber}&bankCode={bankCode}";
+        var req = await CreateRequestAsync(HttpMethod.Get, path, null, ct);
+        return await SendAsync<AccountVerificationResponse>(req, ct);
+    }
 }

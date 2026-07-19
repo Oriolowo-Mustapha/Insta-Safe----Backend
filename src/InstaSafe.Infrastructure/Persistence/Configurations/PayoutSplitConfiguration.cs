@@ -13,7 +13,7 @@ public class PayoutSplitConfiguration : IEntityTypeConfiguration<PayoutSplit>
         builder.Property(p => p.PlatformCommission).HasPrecision(18, 2);
         builder.Property(p => p.CommissionRate).HasPrecision(5, 4);
         builder.Property(p => p.Status).HasConversion<string>();
-        builder.Property(p => p.AlatPayPayoutReference).HasMaxLength(200);
+        builder.Property(p => p.MonnifyTransferReference).HasMaxLength(200);
 
         builder.HasOne(p => p.Order)
             .WithOne(o => o.PayoutSplit)

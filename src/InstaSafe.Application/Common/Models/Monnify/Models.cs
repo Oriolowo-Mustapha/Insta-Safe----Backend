@@ -92,3 +92,35 @@ public record MonnifyBaseResponse<T>(
     string ResponseMessage,
     string ResponseCode,
     T ResponseBody);
+
+// Verification APIs
+public record BvnMatchRequest(
+    string Bvn,
+    string Name,
+    string DateOfBirth,
+    string MobileNumber);
+
+public record BvnMatchResponse(
+    string Bvn,
+    string Name,
+    string DateOfBirth,
+    string MobileNumber,
+    string MatchStatus);
+
+public record NinVerificationRequest(
+    string Nin,
+    string FirstName,
+    string LastName,
+    string Dob);
+
+public record NinVerificationResponse(
+    string Nin,
+    string FirstName,
+    string LastName,
+    string DateOfBirth,
+    string VerificationStatus);
+
+public record AccountVerificationResponse(
+    string AccountNumber,
+    string AccountName,
+    string BankCode);

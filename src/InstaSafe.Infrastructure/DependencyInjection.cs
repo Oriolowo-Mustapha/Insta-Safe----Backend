@@ -3,6 +3,9 @@ using InstaSafe.Application.Common.Models.Monnify;
 using InstaSafe.Infrastructure.Delivery;
 
 using InstaSafe.Infrastructure.ExternalServices.Monnify;
+using InstaSafe.Infrastructure.ExternalServices.Cloudinary;
+using InstaSafe.Infrastructure.ExternalServices.OpenRouter;
+using InstaSafe.Infrastructure.ExternalServices.WhatsApp;
 using InstaSafe.Infrastructure.Persistence;
 using InstaSafe.Infrastructure.Persistence.Repositories;
 using InstaSafe.Infrastructure.Services;
@@ -42,13 +45,32 @@ public static class DependencyInjection
         services.Configure<QrOptions>(configuration.GetSection(QrOptions.SectionName));
         services.AddScoped<IQrTokenService, QrTokenService>();
         services.AddScoped<IFingerprintMatcher, FingerprintMatcher>();
+        services.AddScoped<IFraudScoringEngine, FraudScoringEngine>();
 
         services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
         services.AddScoped<IPasswordHasher, BcryptPasswordHasher>();
         services.AddScoped<IInAppNotificationService, InAppNotificationService>();
         services.AddHttpClient<IEmailService, BrevoEmailService>();
+        
+        services.Configure<CloudinaryOptions>(configuration.GetSection(CloudinaryOptions.SectionName));
+        services.AddScoped<IImageUploadService, CloudinaryImageUploadService>();
+
+        services.Configure<OpenRouterOptions>(configuration.GetSection(OpenRouterOptions.SectionName));
+        services.AddHttpClient<IDisputeResolutionAiService, OpenRouterAiService>()
+            .AddTransientHttpErrorPolicy(policyBuilder =>
+                policyBuilder.WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
+                
+        services.AddHttpClient<IChatbotAiService, ChatbotAiService>()
+            .AddTransientHttpErrorPolicy(policyBuilder =>
+                policyBuilder.WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
+                
+        services.Configure<OpenWaOptions>(configuration.GetSection(OpenWaOptions.SectionName));
+        services.AddHttpClient<IWhatsAppMessagingService, OpenWaMessagingService>()
+            .AddTransientHttpErrorPolicy(policyBuilder =>
+                policyBuilder.WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
 
         // Hangfire
+        services.AddScoped<IBackgroundJobService, HangfireBackgroundJobService>();
         services.AddHangfire(config => config
             .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
             .UseSimpleAssemblyNameTypeSerializer()

@@ -11,10 +11,10 @@ public class WebhookEventLogConfiguration : IEntityTypeConfiguration<WebhookEven
         builder.Property(w => w.Source).HasMaxLength(50).IsRequired();
         builder.Property(w => w.EventType).HasMaxLength(100);
         builder.Property(w => w.RawPayload).IsRequired();
-        builder.Property(w => w.AlatPayTransactionId).HasMaxLength(200);
+        builder.Property(w => w.TransactionReference).HasMaxLength(200);
         builder.Property(w => w.ProcessingResult).HasConversion<string>();
 
-        builder.HasIndex(w => w.AlatPayTransactionId);
+        builder.HasIndex(w => w.TransactionReference);
         builder.HasIndex(w => w.IsProcessed);
         builder.HasIndex(w => w.ReceivedAt);
     }

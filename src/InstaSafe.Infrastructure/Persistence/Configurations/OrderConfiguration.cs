@@ -15,6 +15,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(o => o.Price).HasPrecision(18, 2);
         builder.Property(o => o.Currency).HasMaxLength(5).HasDefaultValue("NGN");
         builder.Property(o => o.Status).HasConversion<string>();
+        builder.Property(o => o.RiskLevel).HasMaxLength(20);
 
         builder.HasOne(o => o.Merchant)
             .WithMany(m => m.Orders)

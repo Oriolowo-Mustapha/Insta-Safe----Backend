@@ -16,6 +16,8 @@ public class Order : BaseEntity
     public string Currency { get; init; } = "NGN";
     public string? DeliveryAddress { get; init; }
     public OrderStatus Status { get; private set; } = OrderStatus.Draft;
+    public int RiskScore { get; set; } = 0;
+    public string RiskLevel { get; set; } = "Unknown";
     public string? EscrowLinkUrl { get; private set; }
     public DateTime? EscrowLinkExpiresAt { get; private set; }
     public DateTime? FundedAt { get; private set; }
