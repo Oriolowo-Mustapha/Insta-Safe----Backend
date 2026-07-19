@@ -12,6 +12,6 @@ public class WebhookEventLog : BaseEntity
     public DateTime? ProcessedAt { get; set; }
     public WebhookProcessingResult? ProcessingResult { get; set; }
     public string? ErrorMessage { get; set; }
-    public string? AlatPayTransactionId { get; set; }
+    public string? TransactionReference { get; set; }
     public bool IsProcessed { get; set; } = false;
 }

@@ -23,6 +23,8 @@ public static class DependencyInjection
         // Wait, standard way to register IRequestPreProcessor in MediatR v12 is via generic injection:
         services.AddTransient(typeof(IRequestPreProcessor<>), typeof(LoggingBehaviour<>));
 
+        services.AddScoped<InstaSafe.Application.Common.Interfaces.IAutoDisputeResolverJob, InstaSafe.Application.Disputes.Jobs.AutoDisputeResolverJob>();
+
         return services;
     }
 }

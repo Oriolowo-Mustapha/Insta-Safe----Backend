@@ -11,11 +11,13 @@ public class RaiseDisputeCommandHandler : IRequestHandler<RaiseDisputeCommand, R
 {
     private readonly IUnitOfWork _unitOfWork;
     private readonly IDateTimeProvider _dateTimeProvider;
+    private readonly IBackgroundJobService _backgroundJobService;
 
-    public RaiseDisputeCommandHandler(IUnitOfWork unitOfWork, IDateTimeProvider dateTimeProvider)
+    public RaiseDisputeCommandHandler(IUnitOfWork unitOfWork, IDateTimeProvider dateTimeProvider, IBackgroundJobService backgroundJobService)
     {
         _unitOfWork = unitOfWork;
         _dateTimeProvider = dateTimeProvider;
+        _backgroundJobService = backgroundJobService;
     }
 
     public async Task<Result<RaiseDisputeResponse>> Handle(RaiseDisputeCommand request, CancellationToken cancellationToken)
@@ -49,6 +51,12 @@ public class RaiseDisputeCommandHandler : IRequestHandler<RaiseDisputeCommand, R
         order.MarkAsDisputed(dispute.Id);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // Queue AI Auto-Resolution Job if evidence is provided
+        if (request.EvidenceUrls != null && request.EvidenceUrls.Any())
+        {
+            _backgroundJobService.Enqueue<IAutoDisputeResolverJob>(x => x.ProcessAsync(dispute.Id));
+        }
 
         return Result<RaiseDisputeResponse>.Success(
             new RaiseDisputeResponse(dispute.Id, "Open", "Dispute raised successfully. Our team will review it."));

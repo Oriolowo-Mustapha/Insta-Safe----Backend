@@ -28,6 +28,7 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<WebhookEventLog> WebhookEventLogs => Set<WebhookEventLog>();
     public DbSet<UserRole> UserRoles => Set<UserRole>();
     public DbSet<InAppNotification> Notifications => Set<InAppNotification>();
+    public DbSet<ChatbotSession> ChatbotSessions => Set<ChatbotSession>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -13,10 +13,10 @@ public class WebhookEventLogRepository : IWebhookEventLogRepository
         _context = context;
     }
 
-    public async Task<bool> IsProcessedAsync(string alatPayTransactionId, CancellationToken ct)
+    public async Task<bool> IsProcessedAsync(string transactionReference, CancellationToken ct)
     {
         return await _context.WebhookEventLogs
-            .AnyAsync(w => w.AlatPayTransactionId == alatPayTransactionId && w.IsProcessed, ct);
+            .AnyAsync(w => w.TransactionReference == transactionReference && w.IsProcessed, ct);
     }
 
     public void Add(WebhookEventLog log)

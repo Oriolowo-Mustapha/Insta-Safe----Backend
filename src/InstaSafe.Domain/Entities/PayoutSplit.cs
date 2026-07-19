@@ -11,7 +11,7 @@ public class PayoutSplit : BaseEntity
     public decimal PlatformCommission { get; init; }
     public decimal CommissionRate { get; init; }
     public DateTime? ExecutedAt { get; private set; }
-    public string? AlatPayPayoutReference { get; private set; }
+    public string? MonnifyTransferReference { get; private set; }
     public PayoutStatus Status { get; private set; } = PayoutStatus.Pending;
 
     public virtual Order Order { get; private set; } = null!;
@@ -21,11 +21,11 @@ public class PayoutSplit : BaseEntity
         Status = PayoutStatus.Processing;
     }
 
-    public void MarkAsCompleted(string reference, DateTime executedAt)
+    public void MarkAsCompleted(string reference, DateTime completedAt)
     {
         Status = PayoutStatus.Completed;
-        AlatPayPayoutReference = reference;
-        ExecutedAt = executedAt;
+        MonnifyTransferReference = reference;
+        ExecutedAt = completedAt;
     }
 
     public void MarkAsFailed()

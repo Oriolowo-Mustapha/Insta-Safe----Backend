@@ -52,7 +52,7 @@ public class ExecuteSplitPayoutCommandHandler : IRequestHandler<ExecuteSplitPayo
 
         payoutSplit.MarkAsProcessing();
 
-        // TODO: Call ALATPay payout API here
+        // TODO: Call Monnify payout API here
         payoutSplit.MarkAsCompleted($"PAYOUT-{Guid.NewGuid().ToString()[..8].ToUpper()}", _dateTimeProvider.UtcNow);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);

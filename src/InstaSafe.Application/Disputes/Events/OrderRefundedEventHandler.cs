@@ -39,7 +39,7 @@ public class OrderRefundedEventHandler : INotificationHandler<OrderRefundedEvent
             await _emailService.SendEmailAsync(
                 order.Buyer.Email,
                 "Order Refund Processed",
-                $"<p>Your dispute regarding <b>{order.ItemName}</b> has been concluded.</p><p>A refund of <b>{notification.RefundAmount:C}</b> has been processed back to your original payment method via ALATPay.</p>",
+                $"<p>Your dispute regarding <b>{order.ItemName}</b> has been concluded.</p><p>A refund of <b>{notification.RefundAmount:C}</b> has been processed back to your original payment method via Monnify.</p>",
                 cancellationToken);
         }
     }

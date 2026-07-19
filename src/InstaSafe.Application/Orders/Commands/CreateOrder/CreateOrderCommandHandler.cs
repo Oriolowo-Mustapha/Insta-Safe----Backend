@@ -10,19 +10,29 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
 {
     private readonly IUnitOfWork _unitOfWork;
     private readonly IDateTimeProvider _dateTimeProvider;
+    private readonly IFraudScoringEngine _fraudScoringEngine;
 
-    public CreateOrderCommandHandler(IUnitOfWork unitOfWork, IDateTimeProvider dateTimeProvider)
+    public CreateOrderCommandHandler(IUnitOfWork unitOfWork, IDateTimeProvider dateTimeProvider, IFraudScoringEngine fraudScoringEngine)
     {
         _unitOfWork = unitOfWork;
         _dateTimeProvider = dateTimeProvider;
+        _fraudScoringEngine = fraudScoringEngine;
     }
 
     public async Task<Result<CreateOrderResponse>> Handle(CreateOrderCommand request, CancellationToken cancellationToken)
     {
-        var merchantExists = await _unitOfWork.Orders.MerchantExistsAsync(request.MerchantId, cancellationToken);
+        var merchant = await _unitOfWork.Repository<Merchant>().GetByIdAsync(request.MerchantId, cancellationToken);
 
-        if (!merchantExists)
+        if (merchant == null)
             return Result<CreateOrderResponse>.Failure("Merchant not found.");
+
+        // 1.5 & 1.6: Build Fraud Scoring Engine & Apply Risk Actions
+        var riskResult = await _fraudScoringEngine.EvaluateMerchantRiskAsync(merchant, cancellationToken);
+        
+        if (riskResult.RiskLevel == "High")
+        {
+            return Result<CreateOrderResponse>.Failure($"Transaction blocked due to high fraud risk. Score: {riskResult.Score}. Reason: {string.Join(", ", riskResult.Factors)}");
+        }
 
         var orderReference = await GenerateOrderReference(cancellationToken);
 
@@ -34,7 +44,9 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
             ItemDescription = request.ItemDescription,
             ItemImageUrl = request.ItemImageUrl,
             Price = request.Price,
-            DeliveryAddress = request.DeliveryAddress
+            DeliveryAddress = request.DeliveryAddress,
+            RiskScore = riskResult.Score,
+            RiskLevel = riskResult.RiskLevel
         };
 
         order.AddDomainEvent(new OrderCreatedEvent(order.Id));

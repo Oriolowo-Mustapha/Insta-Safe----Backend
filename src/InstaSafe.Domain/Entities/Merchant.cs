@@ -12,6 +12,11 @@ public class Merchant : BaseEntity
     public string? MonnifySubAccountCode { get; set; }
     public string? PayoutBankAccount { get; set; }
     public string? PayoutBankCode { get; set; }
+    public string? Bvn { get; set; }
+    public string? Nin { get; set; }
+    public string? LegalFirstName { get; set; }
+    public string? LegalLastName { get; set; }
+    public DateTime? DateOfBirth { get; set; }
     public decimal CommissionRate { get; set; } = 0.05m;
     public bool IsVerified { get; set; } = false;
 
