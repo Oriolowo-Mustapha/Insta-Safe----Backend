@@ -1,5 +1,8 @@
 using InstaSafe.Application.Chatbot.Commands;
+using InstaSafe.Application.Chatbot.Queries.GetChatbotSession;
+using InstaSafe.Application.Chatbot.Queries.GetChatbotSessions;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json.Serialization;
 
@@ -41,6 +44,30 @@ public class ChatbotController : ControllerBase
         await _sender.Send(command);
 
         return Ok();
+    }
+
+    /// <summary>Get all chatbot sessions (admin monitoring).</summary>
+    [HttpGet("sessions")]
+    [Authorize]
+    public async Task<IActionResult> GetSessions()
+    {
+        var query = new GetChatbotSessionsQuery();
+        var result = await _sender.Send(query);
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
+
+    /// <summary>Get a specific chatbot session by ID.</summary>
+    [HttpGet("sessions/{sessionId:guid}")]
+    [Authorize]
+    public async Task<IActionResult> GetSession(Guid sessionId)
+    {
+        var query = new GetChatbotSessionQuery(sessionId);
+        var result = await _sender.Send(query);
+        return result.Succeeded
+            ? Ok(result.Data)
+            : NotFound(new { errors = result.Errors });
     }
 }
 

@@ -1,5 +1,6 @@
 using InstaSafe.Application.Disputes.Commands.RaiseDispute;
 using InstaSafe.Application.Disputes.Commands.ResolveDispute;
+using InstaSafe.Application.Disputes.Queries.GetAllDisputes;
 using InstaSafe.Application.Disputes.Queries.GetDispute;
 using InstaSafe.Application.Disputes.Queries.GetOrderDisputes;
 using InstaSafe.Application.Payouts.Commands.ExecuteSplitPayout;
@@ -19,6 +20,17 @@ public class DisputesController : ControllerBase
     public DisputesController(IMediator mediator)
     {
         _mediator = mediator;
+    }
+
+    /// <summary>Get all disputes (admin list view).</summary>
+    [HttpGet]
+    public async Task<IActionResult> GetAllDisputes()
+    {
+        var query = new GetAllDisputesQuery();
+        var result = await _mediator.Send(query);
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
     }
 
     /// <summary>Buyer raises a dispute on a delivered order.</summary>
