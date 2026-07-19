@@ -109,12 +109,25 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                     var itemVal = finalData["Item"].GetString() ?? "Order via Chatbot";
                     var locationVal = finalData["Location"].GetString() ?? "Unknown Location";
                     
-                    var merchants = await _unitOfWork.Repository<Merchant>().GetAllAsync(cancellationToken);
-                    var merchant = merchants.FirstOrDefault(); // Hackathon default
+                    // Normalize phone number for matching (strip +, leading zeros)
+                    var normalizedPhone = request.PhoneNumber.TrimStart('+').TrimStart('0');
+                    
+                    var merchantList = await _unitOfWork.Repository<Merchant>()
+                        .FindAsync(m => m.Phone.TrimStart('+').TrimStart('0').EndsWith(normalizedPhone) 
+                                     || normalizedPhone.EndsWith(m.Phone.TrimStart('+').TrimStart('0')), 
+                                   cancellationToken);
+                    var merchant = merchantList.FirstOrDefault();
+                    
+                    // Fallback: if no merchant matches by phone, use the first merchant (hackathon)
+                    if (merchant == null)
+                    {
+                        var allMerchants = await _unitOfWork.Repository<Merchant>().GetAllAsync(cancellationToken);
+                        merchant = allMerchants.FirstOrDefault();
+                    }
                     
                     if (merchant == null)
                     {
-                        replyMessage = "System Error: No merchant account found linked to your number.";
+                        replyMessage = "System Error: No merchant account found. Please register at instasafe.com first.";
                         session.Reset();
                         break;
                     }

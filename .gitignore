@@ -47,3 +47,6 @@ desktop.ini
 *.swp
 *.bak
 *.tmp
+/docs
+docs/
+*.md

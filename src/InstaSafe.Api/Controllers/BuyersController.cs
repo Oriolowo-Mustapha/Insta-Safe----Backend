@@ -7,7 +7,6 @@ namespace InstaSafe.Api.Controllers;
 
 [ApiController]
 [Route("api/buyers")]
-[Authorize]
 public class BuyersController : ControllerBase
 {
     private readonly IMediator _mediator;
