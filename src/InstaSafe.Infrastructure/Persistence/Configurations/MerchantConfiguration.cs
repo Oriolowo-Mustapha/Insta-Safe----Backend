@@ -19,7 +19,5 @@ public class MerchantConfiguration : IEntityTypeConfiguration<Merchant>
         builder.Property(m => m.PayoutBankCode).HasMaxLength(10);
         builder.Property(m => m.Bvn).HasMaxLength(11);
         builder.Property(m => m.Nin).HasMaxLength(11);
-        builder.Property(m => m.LegalFirstName).HasMaxLength(100);
-        builder.Property(m => m.LegalLastName).HasMaxLength(100);
     }
 }

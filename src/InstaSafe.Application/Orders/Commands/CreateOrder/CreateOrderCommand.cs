@@ -9,7 +9,12 @@ public record CreateOrderCommand(
     string? ItemDescription,
     string? ItemImageUrl,
     decimal Price,
-    string? DeliveryAddress
+    string? DeliveryAddress,
+    string BuyerFirstName,
+    string BuyerLastName,
+    string BuyerEmail,
+    string BuyerPhone,
+    string? DispatcherPhone
 ) : IRequest<Result<CreateOrderResponse>>;
 
-public record CreateOrderResponse(Guid OrderId, string OrderReference);
+public record CreateOrderResponse(Guid OrderId, string OrderReference, string CheckoutUrl);

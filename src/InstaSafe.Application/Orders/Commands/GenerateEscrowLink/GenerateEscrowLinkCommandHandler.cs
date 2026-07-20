@@ -75,7 +75,7 @@ public class GenerateEscrowLinkCommandHandler : IRequestHandler<GenerateEscrowLi
             $"InstaSafe Escrow: {order.ItemName}",
             "NGN",
             _options.ContractCode,
-            "https://instasafe.ng/payment-success", // Replace with actual redirect
+            "http://localhost:5173", // Replace with actual redirect
             new[] { "CARD", "ACCOUNT_TRANSFER", "USSD" },
             new[]
             {
