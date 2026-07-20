@@ -11,4 +11,5 @@ public interface IMonnifyPaymentService
     Task<MonnifyBaseResponse<BvnMatchResponse>> VerifyBvnAsync(BvnMatchRequest request, CancellationToken ct = default);
     Task<MonnifyBaseResponse<NinVerificationResponse>> VerifyNinAsync(NinVerificationRequest request, CancellationToken ct = default);
     Task<MonnifyBaseResponse<AccountVerificationResponse>> VerifyAccountAsync(string accountNumber, string bankCode, CancellationToken ct = default);
+    Task<MonnifyBaseResponse<List<BankResponse>>> GetBanksAsync(CancellationToken ct = default);
 }

@@ -65,9 +65,10 @@ public class RegisterCommandHandler : IRequestHandler<RegisterCommand, Result<st
         {
             Id = Guid.NewGuid(),
             UserId = user.Id,
-            BusinessName = $"{request.FirstName} {request.LastName}",
+            BusinessName = request.BusinessName,
             Email = request.Email,
-            Phone = request.Phone ?? ""
+            Phone = request.Phone ?? "",
+            DateOfBirth = request.DateOfBirth.ToUniversalTime()
         };
 
         _context.Merchants.Add(merchant);
@@ -81,7 +82,7 @@ public class RegisterCommandHandler : IRequestHandler<RegisterCommand, Result<st
         await _unitOfWork.SaveChangesAsync(ct);
 
         // Send email
-        var verifyLink = $"https://instasafe.com/verify-email?email={user.Email}&token={Uri.EscapeDataString(verificationToken)}";
+        var verifyLink = $"http://localhost:5173/auth/verify-email?email={user.Email}&token={Uri.EscapeDataString(verificationToken)}";
         await _emailService.SendEmailAsync(user.Email, "Verify your InstaSafe Account", 
             $"Please verify your account by clicking this link: <a href=\"{verifyLink}\">{verifyLink}</a>", ct);
 

@@ -20,7 +20,7 @@ public class AuthController : ControllerBase
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request, CancellationToken ct)
     {
-        var command = new RegisterCommand(request.FirstName, request.LastName, request.Email, request.Password, request.Phone);
+        var command = new RegisterCommand(request.FirstName, request.LastName, request.Email, request.Password, request.BusinessName, request.Phone, request.DateOfBirth);
         var result = await _mediator.Send(command, ct);
 
         if (!result.Succeeded)
@@ -45,7 +45,9 @@ public class AuthController : ControllerBase
             Email = result.Data.Email,
             FirstName = result.Data.FirstName,
             LastName = result.Data.LastName,
-            Roles = result.Data.Roles
+            Roles = result.Data.Roles,
+            IsVerified = result.Data.IsVerified,
+            BusinessName = result.Data.BusinessName
         });
     }
 
@@ -70,7 +72,9 @@ public class AuthController : ControllerBase
             Email = result.Data.Email,
             FirstName = result.Data.FirstName,
             LastName = result.Data.LastName,
-            Roles = result.Data.Roles
+            Roles = result.Data.Roles,
+            IsVerified = result.Data.IsVerified,
+            BusinessName = result.Data.BusinessName
         });
     }
     [HttpPost("refresh-token")]
@@ -90,7 +94,9 @@ public class AuthController : ControllerBase
             Email = result.Data.Email,
             FirstName = result.Data.FirstName,
             LastName = result.Data.LastName,
-            Roles = result.Data.Roles
+            Roles = result.Data.Roles,
+            IsVerified = result.Data.IsVerified,
+            BusinessName = result.Data.BusinessName
         });
     }
 
@@ -131,7 +137,7 @@ public class AuthController : ControllerBase
     }
 }
 
-public record RegisterRequest(string FirstName, string LastName, string Email, string Password, string? Phone);
+public record RegisterRequest(string FirstName, string LastName, string Email, string Password, string BusinessName, string? Phone, DateTime DateOfBirth);
 public record LoginRequest(string Email, string Password);
 public record RefreshTokenRequest(string Token, string RefreshToken);
 public record VerifyEmailRequest(string Email, string Token);

@@ -23,6 +23,7 @@ public class RefreshTokenCommandHandler : IRequestHandler<RefreshTokenCommand, R
         var user = await _context.Users
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
+            .Include(u => u.Merchant)
             .FirstOrDefaultAsync(u => u.RefreshToken == request.RefreshToken, ct);
 
         if (user == null || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
@@ -38,6 +39,9 @@ public class RefreshTokenCommandHandler : IRequestHandler<RefreshTokenCommand, R
         
         await _unitOfWork.SaveChangesAsync(ct);
 
-        return Result<AuthResult>.Success(new AuthResult(newToken, newRefreshToken, user.Id.ToString(), user.Email, user.FirstName, user.LastName, roles));
+        var isVerified = user.Merchant?.IsVerified ?? false;
+        var businessName = user.Merchant?.BusinessName ?? $"{user.FirstName} {user.LastName}";
+
+        return Result<AuthResult>.Success(new AuthResult(newToken, newRefreshToken, user.Id.ToString(), user.Email, user.FirstName, user.LastName, roles, isVerified, businessName));
     }
 }

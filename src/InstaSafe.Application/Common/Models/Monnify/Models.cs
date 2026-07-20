@@ -97,28 +97,29 @@ public record MonnifyBaseResponse<T>(
 public record BvnMatchRequest(
     string Bvn,
     string Name,
-    string DateOfBirth,
-    string MobileNumber);
+    string? DateOfBirth = null,
+    string? MobileNo = null);
+
+public record BvnMatchDetails(
+    string MatchStatus,
+    int MatchPercentage);
 
 public record BvnMatchResponse(
     string Bvn,
-    string Name,
-    string DateOfBirth,
-    string MobileNumber,
-    string MatchStatus);
+    BvnMatchDetails Name,
+    string? DateOfBirth,
+    string? MobileNo);
 
-public record NinVerificationRequest(
-    string Nin,
-    string FirstName,
-    string LastName,
-    string Dob);
+public record NinVerificationRequest(string Nin);
 
 public record NinVerificationResponse(
     string Nin,
-    string FirstName,
     string LastName,
+    string FirstName,
+    string? MiddleName,
     string DateOfBirth,
-    string VerificationStatus);
+    string Gender,
+    string MobileNumber);
 
 public record AccountVerificationResponse(
     string AccountNumber,

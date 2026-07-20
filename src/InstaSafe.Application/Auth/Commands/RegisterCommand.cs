@@ -3,4 +3,4 @@ using MediatR;
 
 namespace InstaSafe.Application.Auth.Commands;
 
-public record RegisterCommand(string FirstName, string LastName, string Email, string Password, string? Phone) : IRequest<Result<string>>;
+public record RegisterCommand(string FirstName, string LastName, string Email, string Password, string BusinessName, string? Phone, DateTime DateOfBirth) : IRequest<Result<string>>;

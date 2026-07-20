@@ -29,6 +29,7 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, Result<AuthResu
         var user = await _context.Users
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
+            .Include(u => u.Merchant)
             .FirstOrDefaultAsync(u => u.Email == request.Email, ct);
 
         if (user == null || !_passwordHasher.Verify(request.Password, user.PasswordHash))
@@ -50,6 +51,9 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, Result<AuthResu
         var roles = user.UserRoles.Select(ur => ur.Role.Name).ToList();
         var token = await _tokenGenerator.GenerateTokenAsync(user, roles, ct);
 
-        return Result<AuthResult>.Success(new AuthResult(token, refreshToken, user.Id.ToString(), user.Email, user.FirstName, user.LastName, roles));
+        var isVerified = user.Merchant?.IsVerified ?? false;
+        var businessName = user.Merchant?.BusinessName ?? $"{user.FirstName} {user.LastName}";
+
+        return Result<AuthResult>.Success(new AuthResult(token, refreshToken, user.Id.ToString(), user.Email, user.FirstName, user.LastName, roles, isVerified, businessName));
     }
 }

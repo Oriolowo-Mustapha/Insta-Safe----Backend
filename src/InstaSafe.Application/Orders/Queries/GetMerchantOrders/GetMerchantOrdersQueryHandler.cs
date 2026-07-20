@@ -1,5 +1,6 @@
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
+using InstaSafe.Domain.Entities;
 using InstaSafe.Domain.Enums;
 using MediatR;
 
@@ -22,8 +23,11 @@ public class GetMerchantOrdersQueryHandler : IRequestHandler<GetMerchantOrdersQu
             statusFilter = parsedStatus;
         }
 
+        var merchant = await _unitOfWork.Repository<Merchant>().FindAsync(m => m.UserId == request.MerchantId, cancellationToken);
+        var resolvedMerchantId = merchant.FirstOrDefault()?.Id ?? request.MerchantId;
+
         var (items, totalCount) = await _unitOfWork.Orders.GetMerchantOrdersAsync(
-            request.MerchantId, request.PageNumber, request.PageSize, statusFilter, cancellationToken);
+            resolvedMerchantId, request.PageNumber, request.PageSize, statusFilter, cancellationToken);
 
         var responseItems = items.Select(o => new MerchantOrderResponse
         {

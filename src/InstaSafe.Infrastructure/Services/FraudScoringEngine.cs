@@ -101,11 +101,7 @@ public class FraudScoringEngine : IFraudScoringEngine
             {
                 try
                 {
-                    var request = new NinVerificationRequest(
-                        merchant.Nin,
-                        merchant.LegalFirstName,
-                        merchant.LegalLastName,
-                        merchant.DateOfBirth.Value.ToString("yyyy-MM-dd"));
+                    var request = new NinVerificationRequest(merchant.Nin);
 
                     var ninResponse = await _monnifyService.VerifyNinAsync(request, cancellationToken);
                     

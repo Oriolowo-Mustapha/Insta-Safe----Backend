@@ -21,10 +21,21 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
 
     public async Task<Result<CreateOrderResponse>> Handle(CreateOrderCommand request, CancellationToken cancellationToken)
     {
-        var merchant = await _unitOfWork.Repository<Merchant>().GetByIdAsync(request.MerchantId, cancellationToken);
+        var merchants = await _unitOfWork.Repository<Merchant>().FindAsync(m => m.UserId == request.MerchantId, cancellationToken);
+        var merchant = merchants.FirstOrDefault();
 
         if (merchant == null)
-            return Result<CreateOrderResponse>.Failure("Merchant not found.");
+        {
+            // Fallback in case request.MerchantId was actually the Merchant.Id
+            merchant = await _unitOfWork.Repository<Merchant>().GetByIdAsync(request.MerchantId, cancellationToken);
+            if (merchant == null)
+                return Result<CreateOrderResponse>.Failure("Merchant not found.");
+        }
+
+        if (!merchant.IsVerified)
+        {
+            return Result<CreateOrderResponse>.Failure("Profile incomplete. Please update your KYC and bank details to create orders.");
+        }
 
         // 1.5 & 1.6: Build Fraud Scoring Engine & Apply Risk Actions
         var riskResult = await _fraudScoringEngine.EvaluateMerchantRiskAsync(merchant, cancellationToken);
@@ -39,7 +50,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         var order = new Order
         {
             OrderReference = orderReference,
-            MerchantId = request.MerchantId,
+            MerchantId = merchant.Id,
             ItemName = request.ItemName,
             ItemDescription = request.ItemDescription,
             ItemImageUrl = request.ItemImageUrl,

@@ -30,4 +30,36 @@ public class MerchantsController : ControllerBase
             ? Ok(result.Data)
             : BadRequest(new { errors = result.Errors });
     }
+    [HttpPost("{merchantId:guid}/complete-profile")]
+    public async Task<IActionResult> CompleteProfile(Guid merchantId, [FromBody] CompleteProfileRequest request, CancellationToken ct)
+    {
+        // Enforce that a user can only complete their own profile
+        var authenticatedUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (merchantId.ToString() != authenticatedUserId)
+            return Forbid();
+
+        var command = new InstaSafe.Application.Merchants.Commands.CompleteProfile.CompleteProfileCommand(
+            merchantId, request.Bvn, request.Nin, request.PayoutBankAccount, request.PayoutBankCode);
+            
+        var result = await _mediator.Send(command, ct);
+        
+        if (!result.Succeeded)
+            return BadRequest(new { Message = string.Join("; ", result.Errors) });
+
+        return Ok(new { Message = result.Data });
+    }
+
+    [HttpGet("banks")]
+    [AllowAnonymous] // Or keep it authorized, but usually banks list is safe to expose
+    public async Task<IActionResult> GetBanks(CancellationToken ct)
+    {
+        var query = new InstaSafe.Application.Merchants.Queries.GetBanks.GetBanksQuery();
+        var result = await _mediator.Send(query, ct);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
 }
+
+public record CompleteProfileRequest(string Bvn, string? Nin, string PayoutBankAccount, string PayoutBankCode);

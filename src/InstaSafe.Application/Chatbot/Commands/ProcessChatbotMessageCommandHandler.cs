@@ -153,7 +153,7 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                         PaymentDescription: $"Escrow for {itemVal}",
                         CurrencyCode: "NGN",
                         ContractCode: "YOUR_CONTRACT_CODE", // Would come from config in real app
-                        RedirectUrl: $"https://instasafe.com/orders/{newOrder.OrderReference}",
+                        RedirectUrl: $"http://localhost:5173/order/{newOrder.OrderReference}",
                         PaymentMethods: new[] { "CARD", "ACCOUNT_TRANSFER" },
                         IncomeSplitConfig: null
                     );

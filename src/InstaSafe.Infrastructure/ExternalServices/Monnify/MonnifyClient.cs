@@ -147,4 +147,10 @@ public class MonnifyClient : IMonnifyPaymentService
         var req = await CreateRequestAsync(HttpMethod.Get, path, null, ct);
         return await SendAsync<AccountVerificationResponse>(req, ct);
     }
+
+    public async Task<MonnifyBaseResponse<List<BankResponse>>> GetBanksAsync(CancellationToken ct = default)
+    {
+        var req = await CreateRequestAsync(HttpMethod.Get, "/api/v1/banks", null, ct);
+        return await SendAsync<List<BankResponse>>(req, ct);
+    }
 }

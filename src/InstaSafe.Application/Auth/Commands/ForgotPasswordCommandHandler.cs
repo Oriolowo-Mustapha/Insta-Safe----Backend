@@ -31,7 +31,7 @@ public class ForgotPasswordCommandHandler : IRequestHandler<ForgotPasswordComman
 
         await _unitOfWork.SaveChangesAsync(ct);
 
-        var resetLink = $"https://instasafe.com/reset-password?email={user.Email}&token={Uri.EscapeDataString(resetToken)}";
+        var resetLink = $"http://localhost:5173/auth/reset-password?email={user.Email}&token={Uri.EscapeDataString(resetToken)}";
         await _emailService.SendEmailAsync(user.Email, "Reset your InstaSafe Password", 
             $"Please reset your password by clicking this link: <a href=\"{resetLink}\">{resetLink}</a>. This link will expire in 1 hour.", ct);
 

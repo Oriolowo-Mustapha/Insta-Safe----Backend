@@ -21,6 +21,7 @@ public class GetCurrentUserQueryHandler : IRequestHandler<GetCurrentUserQuery, R
         var user = await _context.Users
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
+            .Include(u => u.Merchant)
             .FirstOrDefaultAsync(u => u.Id == request.UserId, ct);
 
         if (user == null)
@@ -29,6 +30,9 @@ public class GetCurrentUserQueryHandler : IRequestHandler<GetCurrentUserQuery, R
         var roles = user.UserRoles.Select(ur => ur.Role.Name).ToList();
         var token = await _tokenGenerator.GenerateTokenAsync(user, roles, ct);
 
-        return Result<AuthResult>.Success(new AuthResult(token, user.RefreshToken ?? "", user.Id.ToString(), user.Email, user.FirstName, user.LastName, roles));
+        var isVerified = user.Merchant?.IsVerified ?? false;
+        var businessName = user.Merchant?.BusinessName ?? $"{user.FirstName} {user.LastName}";
+
+        return Result<AuthResult>.Success(new AuthResult(token, user.RefreshToken ?? "", user.Id.ToString(), user.Email, user.FirstName, user.LastName, roles, isVerified, businessName));
     }
 }
