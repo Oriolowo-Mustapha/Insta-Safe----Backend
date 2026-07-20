@@ -22,5 +22,18 @@ public class RegisterCommandValidator : AbstractValidator<RegisterCommand>
         RuleFor(v => v.Password)
             .NotEmpty().WithMessage("Password is required.")
             .MinimumLength(8).WithMessage("Password must be at least 8 characters.");
+
+        RuleFor(v => v.BusinessName)
+            .NotEmpty().WithMessage("Business name is required.")
+            .MaximumLength(150);
+
+        RuleFor(v => v.DateOfBirth)
+            .NotEmpty().WithMessage("Date of birth is required.")
+            .Must(BeAtLeast18YearsOld).WithMessage("You must be at least 18 years old to register.");
+    }
+
+    private bool BeAtLeast18YearsOld(DateTime dateOfBirth)
+    {
+        return dateOfBirth <= DateTime.UtcNow.AddYears(-18);
     }
 }

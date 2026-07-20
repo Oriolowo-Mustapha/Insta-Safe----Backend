@@ -62,7 +62,22 @@ public class OrdersController : ControllerBase
             : NotFound(new { errors = result.Errors });
     }
 
+    [HttpDelete("{orderId:guid}")]
+    public async Task<IActionResult> DeleteOrder(Guid orderId)
+    {
+        var userId = User.Claims.FirstOrDefault(c => c.Type == System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId) || !Guid.TryParse(userId, out var merchantId))
+        {
+            return Unauthorized();
+        }
 
+        var command = new InstaSafe.Application.Orders.Commands.DeleteOrder.DeleteOrderCommand(orderId, merchantId);
+        var result = await _mediator.Send(command);
+        
+        return result.Succeeded
+            ? NoContent()
+            : BadRequest(new { errors = result.Errors });
+    }
 }
 
 public record GenerateEscrowLinkRequest(

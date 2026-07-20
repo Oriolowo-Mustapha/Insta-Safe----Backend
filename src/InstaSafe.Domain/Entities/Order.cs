@@ -15,6 +15,7 @@ public class Order : BaseEntity
     public decimal Price { get; init; }
     public string Currency { get; init; } = "NGN";
     public string? DeliveryAddress { get; init; }
+    public string? DispatcherPhone { get; init; }
     public OrderStatus Status { get; private set; } = OrderStatus.Draft;
     public int RiskScore { get; set; } = 0;
     public string RiskLevel { get; set; } = "Unknown";

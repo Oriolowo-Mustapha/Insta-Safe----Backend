@@ -10,6 +10,7 @@ using InstaSafe.Domain.Events;
 using MediatR;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using InstaSafe.Application.Delivery.Commands.GenerateDeliveryQrCodes;
 
 namespace InstaSafe.Application.Payments.Commands.ProcessMonnifyWebhook;
 
@@ -19,17 +20,23 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
     private readonly IDateTimeProvider _dateTimeProvider;
     private readonly ILogger<ProcessMonnifyWebhookCommandHandler> _logger;
     private readonly MonnifyOptions _options;
+    private readonly IMediator _mediator;
+    private readonly IWhatsAppMessagingService _whatsappService;
 
     public ProcessMonnifyWebhookCommandHandler(
         IUnitOfWork unitOfWork,
         IDateTimeProvider dateTimeProvider,
         ILogger<ProcessMonnifyWebhookCommandHandler> logger,
-        IOptions<MonnifyOptions> options)
+        IOptions<MonnifyOptions> options,
+        IMediator mediator,
+        IWhatsAppMessagingService whatsappService)
     {
         _unitOfWork = unitOfWork;
         _dateTimeProvider = dateTimeProvider;
         _logger = logger;
         _options = options.Value;
+        _mediator = mediator;
+        _whatsappService = whatsappService;
     }
 
     public async Task<Result<bool>> Handle(ProcessMonnifyWebhookCommand request, CancellationToken cancellationToken)
@@ -113,6 +120,25 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation($"Successfully processed payment for order {order.Id}");
+
+        // Automated Merchant Handoff Flow
+        if (order.Merchant != null && !string.IsNullOrEmpty(order.Merchant.Phone))
+        {
+            var qrResult = await _mediator.Send(new GenerateDeliveryQrCodesCommand(order.Id), cancellationToken);
+            if (qrResult.Succeeded && qrResult.Data != null)
+            {
+                string message = $"InstaSafe Alert ✅\n\n" +
+                                 $"Great news! Your customer has paid for Order #{order.OrderReference} ({order.ItemName}).\n" +
+                                 $"The funds are now securely held in Escrow.\n\n" +
+                                 $"When the dispatcher arrives to pick up the item, please show them this Pickup QR Code Token to confirm pickup:\n" +
+                                 $"*{qrResult.Data.MerchantQrToken}*\n\n" +
+                                 $"Do not give the item to the dispatcher until they successfully scan this code.";
+
+                await _whatsappService.SendMessageAsync(order.Merchant.Phone, message, cancellationToken);
+                _logger.LogInformation($"Dispatched Merchant QR code via WhatsApp to {order.Merchant.Phone} for Order {order.Id}");
+            }
+        }
+
         return Result<bool>.Success(true);
     }
 
