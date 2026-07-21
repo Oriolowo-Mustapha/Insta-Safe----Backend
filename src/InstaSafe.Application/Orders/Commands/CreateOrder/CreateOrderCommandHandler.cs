@@ -7,6 +7,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace InstaSafe.Application.Orders.Commands.CreateOrder;
 
@@ -26,7 +27,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         IDateTimeProvider dateTimeProvider, 
         IFraudScoringEngine fraudScoringEngine,
         IMonnifyPaymentService monnifyClient,
-        Microsoft.Extensions.Options.IOptions<InstaSafe.Application.Common.Models.Monnify.MonnifyOptions> options,
+        IOptions<MonnifyOptions> options,
         IConfiguration configuration)
     {
         _context = context;
