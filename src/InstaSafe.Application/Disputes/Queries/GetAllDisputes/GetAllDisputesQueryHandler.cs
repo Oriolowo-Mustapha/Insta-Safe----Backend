@@ -34,7 +34,9 @@ public class GetAllDisputesQueryHandler : IRequestHandler<GetAllDisputesQuery, R
                 dispute.Resolution,
                 dispute.ResolvedAt,
                 dispute.ResolvedBy,
-                dispute.CreatedAt
+                dispute.CreatedAt,
+                dispute.AiConfidenceScore,
+                dispute.AiAnalysisSummary
             ));
         }
 

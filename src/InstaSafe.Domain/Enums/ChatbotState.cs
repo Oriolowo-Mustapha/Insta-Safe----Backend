@@ -7,5 +7,6 @@ public enum ChatbotState
     AwaitingOrderDescription,
     AwaitingOrderBuyerEmail,
     ConfirmingOrder,
-    AwaitingOrderStatusReference
+    AwaitingOrderStatusReference,
+    RaisingDispute
 }

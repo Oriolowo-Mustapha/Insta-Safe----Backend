@@ -1,9 +1,10 @@
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
+using InstaSafe.Application.Common.Models.Monnify;
 using InstaSafe.Domain.Entities;
 using InstaSafe.Domain.Enums;
-using InstaSafe.Domain.Events;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace InstaSafe.Application.Disputes.Commands.ResolveDispute;
 
@@ -11,11 +12,19 @@ public class ResolveDisputeCommandHandler : IRequestHandler<ResolveDisputeComman
 {
     private readonly IUnitOfWork _unitOfWork;
     private readonly IDateTimeProvider _dateTimeProvider;
+    private readonly IMonnifyPaymentService _monnifyClient;
+    private readonly ILogger<ResolveDisputeCommandHandler> _logger;
 
-    public ResolveDisputeCommandHandler(IUnitOfWork unitOfWork, IDateTimeProvider dateTimeProvider)
+    public ResolveDisputeCommandHandler(
+        IUnitOfWork unitOfWork, 
+        IDateTimeProvider dateTimeProvider,
+        IMonnifyPaymentService monnifyClient,
+        ILogger<ResolveDisputeCommandHandler> logger)
     {
         _unitOfWork = unitOfWork;
         _dateTimeProvider = dateTimeProvider;
+        _monnifyClient = monnifyClient;
+        _logger = logger;
     }
 
     public async Task<Result<ResolveDisputeResponse>> Handle(ResolveDisputeCommand request, CancellationToken cancellationToken)
@@ -36,16 +45,46 @@ public class ResolveDisputeCommandHandler : IRequestHandler<ResolveDisputeComman
         if (request.Resolution.Equals("refund", StringComparison.OrdinalIgnoreCase))
         {
             var now = _dateTimeProvider.UtcNow;
-            var resolutionNote = request.AdminNotes ?? "Refund issued to buyer.";
-            dispute.ResolveAsRefund(resolutionNote, request.ResolvedByUserId!, now);
-
             var refundAmount = order.EscrowTransaction?.Amount ?? order.Price;
-            order.Refund(refundAmount, now);
-            
-            if (order.EscrowTransaction != null)
+            var resolutionNote = request.AdminNotes ?? "Refund issued to buyer.";
+
+            if (order.EscrowTransaction == null || string.IsNullOrEmpty(order.EscrowTransaction.MonnifyTransactionReference))
             {
-                order.EscrowTransaction.MarkAsRefunded(now);
+                return Result<ResolveDisputeResponse>.Failure("Cannot process refund: Monnify transaction reference is missing.");
             }
+
+            var refundRef = $"REFUND-ORD-{order.OrderReference}-{Guid.NewGuid().ToString()[..6].ToUpper()}";
+            var refundReq = new RefundRequest(
+                order.EscrowTransaction.MonnifyTransactionReference,
+                refundAmount,
+                refundRef,
+                resolutionNote,
+                "Full refund for dispute resolution"
+            );
+
+            try
+            {
+                var monnifyResponse = await _monnifyClient.InitiateRefundAsync(refundReq, cancellationToken);
+                if (monnifyResponse.RequestSuccessful)
+                {
+                    _logger.LogInformation("Successfully initiated refund {RefundRef} for Order {OrderId}", refundRef, order.Id);
+                }
+                else
+                {
+                    _logger.LogWarning("Monnify refund failed for Order {OrderId}. Message: {Msg}", order.Id, monnifyResponse.ResponseMessage);
+                    return Result<ResolveDisputeResponse>.Failure($"Monnify refund failed: {monnifyResponse.ResponseMessage}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Exception initiating refund for Order {OrderId}", order.Id);
+                return Result<ResolveDisputeResponse>.Failure($"Exception initiating refund: {ex.Message}");
+            }
+
+            dispute.ResolveAsRefund(resolutionNote, request.ResolvedByUserId!, now);
+            order.Refund(refundAmount, now);
+            order.EscrowTransaction.MarkAsRefunded(now);
+            
             response = new ResolveDisputeResponse("Refunded", "Dispute resolved. Buyer will be refunded.");
         }
         else // release
@@ -75,7 +114,7 @@ public class ResolveDisputeCommandHandler : IRequestHandler<ResolveDisputeComman
             {
                 order.EscrowTransaction.MarkAsReleased(now);
             }
-            response = new ResolveDisputeResponse("Released", "Dispute resolved. Funds released to merchant.");
+            response = new ResolveDisputeResponse("Released", "Dispute resolved. Funds released to merchant. Payout job will disburse funds.");
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);

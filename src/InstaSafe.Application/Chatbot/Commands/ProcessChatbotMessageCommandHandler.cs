@@ -7,6 +7,8 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
+using Microsoft.Extensions.Configuration;
+
 namespace InstaSafe.Application.Chatbot.Commands;
 
 public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbotMessageCommand, Result<string>>
@@ -16,19 +18,22 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
     private readonly IWhatsAppMessagingService _messagingService;
     private readonly IMonnifyPaymentService _monnifyPaymentService;
     private readonly IDateTimeProvider _dateTimeProvider;
+    private readonly IConfiguration _configuration;
 
     public ProcessChatbotMessageCommandHandler(
         IUnitOfWork unitOfWork, 
         IChatbotAiService aiService, 
         IWhatsAppMessagingService messagingService,
         IMonnifyPaymentService monnifyPaymentService,
-        IDateTimeProvider dateTimeProvider)
+        IDateTimeProvider dateTimeProvider,
+        IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _aiService = aiService;
         _messagingService = messagingService;
         _monnifyPaymentService = monnifyPaymentService;
         _dateTimeProvider = dateTimeProvider;
+        _configuration = configuration;
     }
 
     public async Task<Result<string>> Handle(ProcessChatbotMessageCommand request, CancellationToken cancellationToken)
@@ -51,22 +56,74 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
 
         string replyMessage = "";
 
+        // Determine User Role
+        var normalizedPhone = request.PhoneNumber.TrimStart('+').TrimStart('0');
+
+        var merchantList = await _unitOfWork.Repository<Merchant>()
+            .FindAsync(m => m.Phone.TrimStart('+').TrimStart('0').EndsWith(normalizedPhone) 
+                         || normalizedPhone.EndsWith(m.Phone.TrimStart('+').TrimStart('0')), 
+                       cancellationToken);
+        var merchant = merchantList.FirstOrDefault();
+
+        var buyerOrders = await _unitOfWork.Repository<Order>()
+            .FindAsync(o => o.Buyer != null && (o.Buyer.Phone.TrimStart('+').TrimStart('0').EndsWith(normalizedPhone)
+                         || normalizedPhone.EndsWith(o.Buyer.Phone.TrimStart('+').TrimStart('0'))),
+                       cancellationToken);
+        var latestBuyerOrder = buyerOrders.OrderByDescending(o => o.CreatedAt).FirstOrDefault();
+
+        bool isMerchant = merchant != null;
+        bool isBuyer = latestBuyerOrder != null;
+
+        if (!isMerchant && !isBuyer)
+        {
+            // Hackathon fallback
+            var allMerchants = await _unitOfWork.Repository<Merchant>().GetAllAsync(cancellationToken);
+            merchant = allMerchants.FirstOrDefault();
+            if (merchant != null)
+            {
+                isMerchant = true; // Default unknown to merchant for demo purposes
+            }
+            else
+            {
+                replyMessage = "Sorry, this phone number is not recognized as an active Merchant or Buyer in InstaSafe.";
+                await _messagingService.SendMessageAsync(request.PhoneNumber, replyMessage, cancellationToken);
+                return Result<string>.Success(replyMessage);
+            }
+        }
+
         switch (session.CurrentState)
         {
             case ChatbotState.Idle:
+                // Direct keyword check for disputes
+                if (request.MessageText.Contains("dispute", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!isBuyer)
+                    {
+                        replyMessage = "As a Buyer, you can only raise disputes here. However, I couldn't find any recent orders linked to your phone number.";
+                        break;
+                    }
+                    
+                    session.UpdateState(ChatbotState.RaisingDispute, null);
+                    replyMessage = "To raise a dispute, you MUST attach an image of the wrong or damaged item as evidence. Please upload the image now to proceed.";
+                    break;
+                }
+
                 var aiResult = await _aiService.ParseIntentAsync(request.MessageText, cancellationToken);
                 
                 if (aiResult.Intent == "CreateOrder")
                 {
+                    if (!isMerchant)
+                    {
+                        replyMessage = "As a Buyer, you are only allowed to raise disputes here. You cannot create orders.";
+                        break;
+                    }
+
                     if (!string.IsNullOrWhiteSpace(aiResult.ReplyMessage))
                     {
-                        // The AI realized some details (Item, Price, Location) are missing and asked for them
                         replyMessage = aiResult.ReplyMessage;
-                        // Stay in Idle state so they can reply with missing details in their next natural language message
                     }
                     else
                     {
-                        // We have all details
                         try
                         {
                             var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(aiResult.ExtractedData ?? "{}");
@@ -90,18 +147,25 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                         }
                     }
                 }
-                else if (aiResult.Intent == "CheckStatus")
-                {
-                    session.UpdateState(ChatbotState.AwaitingOrderStatusReference);
-                    replyMessage = "Sure, I can check that for you. Please provide your Order Reference ID.";
-                }
                 else
                 {
-                    replyMessage = aiResult.ReplyMessage ?? "I'm sorry, I didn't understand. Do you want to *Create an Order* or *Check Order Status*?";
+                    if (isMerchant)
+                        replyMessage = "As a Merchant, you can only create orders here. If you need support, please use the web dashboard.";
+                    else if (isBuyer)
+                        replyMessage = "As a Buyer, you can only raise disputes here. Please reply with 'I want to raise a dispute' if you have an issue with an order.";
+                    else
+                        replyMessage = "I'm sorry, I didn't understand. If you are a Merchant, you can create an order. If you are a Buyer, you can raise a dispute.";
                 }
                 break;
 
             case ChatbotState.ConfirmingOrder:
+                if (!isMerchant)
+                {
+                    replyMessage = "Action not allowed.";
+                    session.Reset();
+                    break;
+                }
+
                 if (request.MessageText.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase))
                 {
                     var finalData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(session.TemporaryData ?? "{}");
@@ -109,33 +173,10 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                     var itemVal = finalData["Item"].GetString() ?? "Order via Chatbot";
                     var locationVal = finalData["Location"].GetString() ?? "Unknown Location";
                     
-                    // Normalize phone number for matching (strip +, leading zeros)
-                    var normalizedPhone = request.PhoneNumber.TrimStart('+').TrimStart('0');
-                    
-                    var merchantList = await _unitOfWork.Repository<Merchant>()
-                        .FindAsync(m => m.Phone.TrimStart('+').TrimStart('0').EndsWith(normalizedPhone) 
-                                     || normalizedPhone.EndsWith(m.Phone.TrimStart('+').TrimStart('0')), 
-                                   cancellationToken);
-                    var merchant = merchantList.FirstOrDefault();
-                    
-                    // Fallback: if no merchant matches by phone, use the first merchant (hackathon)
-                    if (merchant == null)
-                    {
-                        var allMerchants = await _unitOfWork.Repository<Merchant>().GetAllAsync(cancellationToken);
-                        merchant = allMerchants.FirstOrDefault();
-                    }
-                    
-                    if (merchant == null)
-                    {
-                        replyMessage = "System Error: No merchant account found. Please register at instasafe.com first.";
-                        session.Reset();
-                        break;
-                    }
-
                     var newOrder = new Order
                     {
                         OrderReference = "CB-" + Guid.NewGuid().ToString("N").Substring(0, 6).ToUpper(),
-                        MerchantId = merchant.Id,
+                        MerchantId = merchant!.Id,
                         ItemName = itemVal,
                         Price = amountVal,
                         ItemDescription = $"Delivery to {locationVal}"
@@ -144,16 +185,16 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                     _unitOfWork.Orders.Add(newOrder);
                     await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-                    // Generate Monnify Payment Link
+                    var frontendUrl = _configuration["FrontendUrl:Production"] ?? "https://instasafe.vercel.app";
                     var initRequest = new InitTransactionRequest(
                         Amount: amountVal,
                         CustomerName: merchant.BusinessName,
-                        CustomerEmail: "buyer@example.com", // Since this is a quick chatbot flow, we use a placeholder or ask for it
+                        CustomerEmail: "buyer@example.com", 
                         PaymentReference: newOrder.OrderReference,
                         PaymentDescription: $"Escrow for {itemVal}",
                         CurrencyCode: "NGN",
-                        ContractCode: "YOUR_CONTRACT_CODE", // Would come from config in real app
-                        RedirectUrl: $"http://localhost:5173/order/{newOrder.OrderReference}",
+                        ContractCode: "YOUR_CONTRACT_CODE", 
+                        RedirectUrl: $"{frontendUrl}/order/{newOrder.OrderReference}",
                         PaymentMethods: new[] { "CARD", "ACCOUNT_TRANSFER" },
                         IncomeSplitConfig: null
                     );
@@ -179,7 +220,7 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                 }
                 else if (request.MessageText.Trim().Equals("no", StringComparison.OrdinalIgnoreCase))
                 {
-                    replyMessage = "Order creation cancelled. How else can I help you today?";
+                    replyMessage = "Order creation cancelled.";
                     session.Reset();
                 }
                 else
@@ -188,45 +229,61 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                 }
                 break;
 
-            case ChatbotState.AwaitingOrderStatusReference:
-                if (Guid.TryParse(request.MessageText, out Guid orderId))
+            case ChatbotState.RaisingDispute:
+                if (!isBuyer || latestBuyerOrder == null)
                 {
-                    var order = await _unitOfWork.Orders.GetByIdWithAllAsync(orderId, cancellationToken);
-                    if (order != null)
+                    replyMessage = "Action not allowed.";
+                    session.Reset();
+                    break;
+                }
+
+                if (request.MessageType == "image")
+                {
+                    // Call the AI Vision service to analyze the image against the order description
+                    var evidenceUrl = request.MessageText; // In a real OpenWA implementation, you would extract the actual media URL here
+                    var visionResult = await _aiService.AnalyzeDisputeAsync(
+                        latestBuyerOrder.ItemDescription ?? latestBuyerOrder.ItemName, 
+                        "Dispute raised via WhatsApp with image.", 
+                        evidenceUrl, 
+                        cancellationToken);
+
+                    var newDispute = new Dispute
                     {
-                        replyMessage = $"Order Status for {orderId.ToString().Substring(0,8)}:\nStatus: *{order.Status}*\nAmount: {order.Price} NGN";
-                    }
-                    else
-                    {
-                        replyMessage = "I couldn't find an order with that ID.";
-                    }
+                        Id = Guid.NewGuid(),
+                        OrderId = latestBuyerOrder.Id,
+                        RaisedByBuyerId = latestBuyerOrder.BuyerId!.Value,
+                        Reason = "Dispute raised via WhatsApp Chatbot.",
+                        EvidenceUrls = evidenceUrl
+                    };
+                    
+                    newDispute.AugmentWithAi(visionResult.ConfidenceScore, visionResult.Summary);
+                    
+                    _unitOfWork.Repository<Dispute>().Add(newDispute);
+                    
+                    latestBuyerOrder.MarkAsDisputed(newDispute.Id);
+                    
+                    replyMessage = $"Dispute successfully logged for Order {latestBuyerOrder.OrderReference}!\n\n🤖 AI Verdict Preview: {visionResult.Summary}\n\nAn admin will review it shortly and the funds have been frozen.";
+                    session.Reset();
                 }
                 else
                 {
-                    // Maybe it's a string reference
-                    var orders = await _unitOfWork.Repository<Order>().FindAsync(o => o.OrderReference == request.MessageText.Trim(), cancellationToken);
-                    var order = orders.FirstOrDefault();
-                    if (order != null)
+                    replyMessage = "To proceed with the dispute, you MUST upload an IMAGE of the wrong or damaged item as evidence. Please upload an image now, or reply 'Cancel' to abort.";
+                    
+                    if (request.MessageText.Equals("cancel", StringComparison.OrdinalIgnoreCase))
                     {
-                        replyMessage = $"Order Status for {order.OrderReference}:\nStatus: *{order.Status}*\nAmount: {order.Price} NGN";
-                    }
-                    else
-                    {
-                        replyMessage = "I couldn't find an order with that ID. Please ensure it's correct.";
+                        replyMessage = "Dispute cancelled.";
+                        session.Reset();
                     }
                 }
-                session.Reset();
                 break;
 
             default:
                 session.Reset();
-                replyMessage = "Session reset. How can I help you today?";
+                replyMessage = "Session reset.";
                 break;
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-        // Send reply to WhatsApp
         await _messagingService.SendMessageAsync(request.PhoneNumber, replyMessage, cancellationToken);
 
         return Result<string>.Success(replyMessage);

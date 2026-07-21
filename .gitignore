@@ -17,6 +17,7 @@ launchSettings.json
 ## Secrets
 **/appsettings.Development.json
 **/appsettings.json
+.env
 
 ## User secrets
 secrets.json

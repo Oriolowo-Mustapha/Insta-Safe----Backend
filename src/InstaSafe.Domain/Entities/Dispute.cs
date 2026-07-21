@@ -13,6 +13,10 @@ public class Dispute : BaseEntity
     public string? Resolution { get; private set; }
     public DateTime? ResolvedAt { get; private set; }
     public string? ResolvedBy { get; private set; }
+    
+    // AI Augmentation Fields
+    public int? AiConfidenceScore { get; private set; }
+    public string? AiAnalysisSummary { get; private set; }
 
     public virtual Order Order { get; private set; } = null!;
     public virtual Buyer Buyer { get; private set; } = null!;
@@ -31,5 +35,11 @@ public class Dispute : BaseEntity
         Resolution = resolution;
         ResolvedBy = resolvedBy;
         ResolvedAt = resolvedAt;
+    }
+
+    public void AugmentWithAi(int confidenceScore, string analysisSummary)
+    {
+        AiConfidenceScore = confidenceScore;
+        AiAnalysisSummary = analysisSummary;
     }
 }

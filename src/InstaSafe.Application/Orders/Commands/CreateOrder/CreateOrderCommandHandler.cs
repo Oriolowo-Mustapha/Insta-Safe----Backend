@@ -1,9 +1,12 @@
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
+using InstaSafe.Application.Common.Models.Monnify;
 using InstaSafe.Domain.Entities;
 using InstaSafe.Domain.Events;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
+
+using Microsoft.Extensions.Configuration;
 
 namespace InstaSafe.Application.Orders.Commands.CreateOrder;
 
@@ -15,6 +18,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
     private readonly IFraudScoringEngine _fraudScoringEngine;
     private readonly IMonnifyPaymentService _monnifyClient;
     private readonly InstaSafe.Application.Common.Models.Monnify.MonnifyOptions _options;
+    private readonly IConfiguration _configuration;
 
     public CreateOrderCommandHandler(
         IApplicationDbContext context, 
@@ -22,7 +26,8 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         IDateTimeProvider dateTimeProvider, 
         IFraudScoringEngine fraudScoringEngine,
         IMonnifyPaymentService monnifyClient,
-        Microsoft.Extensions.Options.IOptions<InstaSafe.Application.Common.Models.Monnify.MonnifyOptions> options)
+        Microsoft.Extensions.Options.IOptions<InstaSafe.Application.Common.Models.Monnify.MonnifyOptions> options,
+        IConfiguration configuration)
     {
         _context = context;
         _unitOfWork = unitOfWork;
@@ -30,6 +35,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         _fraudScoringEngine = fraudScoringEngine;
         _monnifyClient = monnifyClient;
         _options = options.Value;
+        _configuration = configuration;
     }
 
     public async Task<Result<CreateOrderResponse>> Handle(CreateOrderCommand request, CancellationToken cancellationToken)
@@ -67,6 +73,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
 
         var order = new Order
         {
+            Id = Guid.NewGuid(),
             OrderReference = orderReference,
             MerchantId = merchant.Id,
             ItemName = request.ItemName,
@@ -81,27 +88,10 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         
         order.SetBuyer(buyer.Id);
 
-        // Ensure merchant has a sub-account
-        if (string.IsNullOrEmpty(merchant.MonnifySubAccountCode))
-        {
-            if (string.IsNullOrEmpty(merchant.PayoutBankAccount) || string.IsNullOrEmpty(merchant.PayoutBankCode))
-                return Result<CreateOrderResponse>.Failure("Merchant must have a payout bank account configured to receive funds.");
+        // Use the primary Escrow Monnify Wallet (No sub-account needed)
+        // Funds will sit in the main wallet until single transfer disbursement
 
-            var subAccountReq = new InstaSafe.Application.Common.Models.Monnify.SubAccountRequest(
-                "NGN", merchant.PayoutBankAccount, merchant.PayoutBankCode, merchant.Email, 98.0m
-            );
-
-            try
-            {
-                var subResponse = await _monnifyClient.CreateSubAccountAsync(subAccountReq, cancellationToken);
-                merchant.MonnifySubAccountCode = subResponse.ResponseBody.SubAccountCode;
-            }
-            catch (Exception ex)
-            {
-                return Result<CreateOrderResponse>.Failure($"Failed to create merchant sub-account: {ex.Message}");
-            }
-        }
-
+        var frontendUrl = _configuration["FrontendUrl:Production"] ?? "https://instasafe.vercel.app";
         var initReq = new InstaSafe.Application.Common.Models.Monnify.InitTransactionRequest(
             order.Price,
             $"{request.BuyerFirstName} {request.BuyerLastName}",
@@ -110,20 +100,12 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
             $"InstaSafe Escrow: {order.ItemName}",
             "NGN",
             _options.ContractCode,
-            "http://localhost:5173", // Replace with actual redirect
+            $"{frontendUrl}/order/{order.OrderReference}", 
             new[] { "CARD", "ACCOUNT_TRANSFER", "USSD" },
-            new[]
-            {
-                new InstaSafe.Application.Common.Models.Monnify.IncomeSplitConfig(
-                    merchant.MonnifySubAccountCode,
-                    98.0m, // Ensure 98% split
-                    0,
-                    true // Fee bearer
-                )
-            }
+            null // No split config, funds go to the main wallet
         );
 
-        InstaSafe.Application.Common.Models.Monnify.MonnifyBaseResponse<InstaSafe.Application.Common.Models.Monnify.InitTransactionResponse> initResponse;
+        MonnifyBaseResponse<InitTransactionResponse> initResponse;
         try
         {
             initResponse = await _monnifyClient.InitializeTransactionAsync(initReq, cancellationToken);
@@ -132,6 +114,9 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         {
             return Result<CreateOrderResponse>.Failure($"Failed to generate payment link: {ex.Message}");
         }
+
+        if (!initResponse.RequestSuccessful)
+            return Result<CreateOrderResponse>.Failure($"Monnify validation failed: {initResponse.ResponseMessage}");
 
         if (initResponse.ResponseBody == null || string.IsNullOrEmpty(initResponse.ResponseBody.CheckoutUrl))
             return Result<CreateOrderResponse>.Failure("Monnify did not return a valid checkout URL.");
@@ -163,6 +148,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         var prefix = $"INSTA-ORD-{today}";
         var count = await _unitOfWork.Orders.CountOrdersByReferencePrefixAsync(prefix, cancellationToken);
 
-        return $"{prefix}-{(count + 1):D4}";
+        var randomSuffix = Guid.NewGuid().ToString("N").Substring(0, 5).ToUpper();
+        return $"{prefix}-{(count + 1):D4}-{randomSuffix}";
     }
 }

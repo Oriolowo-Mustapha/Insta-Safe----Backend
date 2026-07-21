@@ -12,5 +12,7 @@ public record DisputeDto(
     string? Resolution,
     DateTime? ResolvedAt,
     string? ResolvedBy,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    int? AiConfidenceScore,
+    string? AiAnalysisSummary
 );

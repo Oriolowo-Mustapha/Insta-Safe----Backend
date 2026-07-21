@@ -1,8 +1,11 @@
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
+using InstaSafe.Application.Common.Models.Monnify;
 using InstaSafe.Domain.Entities;
 using InstaSafe.Domain.Enums;
 using MediatR;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace InstaSafe.Application.Payouts.Commands.ExecuteSplitPayout;
 
@@ -10,11 +13,22 @@ public class ExecuteSplitPayoutCommandHandler : IRequestHandler<ExecuteSplitPayo
 {
     private readonly IUnitOfWork _unitOfWork;
     private readonly IDateTimeProvider _dateTimeProvider;
+    private readonly IMonnifyPaymentService _monnifyClient;
+    private readonly MonnifyOptions _options;
+    private readonly ILogger<ExecuteSplitPayoutCommandHandler> _logger;
 
-    public ExecuteSplitPayoutCommandHandler(IUnitOfWork unitOfWork, IDateTimeProvider dateTimeProvider)
+    public ExecuteSplitPayoutCommandHandler(
+        IUnitOfWork unitOfWork, 
+        IDateTimeProvider dateTimeProvider,
+        IMonnifyPaymentService monnifyClient,
+        IOptions<MonnifyOptions> options,
+        ILogger<ExecuteSplitPayoutCommandHandler> logger)
     {
         _unitOfWork = unitOfWork;
         _dateTimeProvider = dateTimeProvider;
+        _monnifyClient = monnifyClient;
+        _options = options.Value;
+        _logger = logger;
     }
 
     public async Task<Result<ExecuteSplitPayoutResponse>> Handle(ExecuteSplitPayoutCommand request, CancellationToken cancellationToken)
@@ -51,9 +65,48 @@ public class ExecuteSplitPayoutCommandHandler : IRequestHandler<ExecuteSplitPayo
         }
 
         payoutSplit.MarkAsProcessing();
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        // TODO: Call Monnify payout API here
-        payoutSplit.MarkAsCompleted($"PAYOUT-{Guid.NewGuid().ToString()[..8].ToUpper()}", _dateTimeProvider.UtcNow);
+        // Disburse funds to Merchant via Single Transfer
+        if (string.IsNullOrEmpty(order.Merchant!.PayoutBankAccount) || string.IsNullOrEmpty(order.Merchant.PayoutBankCode))
+        {
+            payoutSplit.MarkAsFailed();
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return Result<ExecuteSplitPayoutResponse>.Failure("Merchant does not have a payout bank account configured.");
+        }
+
+        var transferRef = $"PAYOUT-{Guid.NewGuid().ToString()[..8].ToUpper()}";
+        var transferReq = new SingleTransferRequest(
+            payoutSplit.MerchantAmount,
+            transferRef,
+            $"InstaSafe Payout: Order {order.OrderReference}",
+            order.Merchant.PayoutBankCode,
+            order.Merchant.PayoutBankAccount,
+            order.Merchant.BusinessName,
+            "NGN",
+            _options.WalletAccountNumber
+        );
+
+        try
+        {
+            var response = await _monnifyClient.InitiateSingleTransferAsync(transferReq, cancellationToken);
+            
+            if (response.RequestSuccessful)
+            {
+                payoutSplit.MarkAsCompleted(response.ResponseBody.Reference, _dateTimeProvider.UtcNow);
+                _logger.LogInformation("Successfully initiated single transfer for payout {PayoutId}. Ref: {Ref}", payoutSplit.Id, transferRef);
+            }
+            else
+            {
+                payoutSplit.MarkAsFailed();
+                _logger.LogWarning("Single transfer failed for payout {PayoutId}. Message: {Msg}", payoutSplit.Id, response.ResponseMessage);
+            }
+        }
+        catch (Exception ex)
+        {
+            payoutSplit.MarkAsFailed();
+            _logger.LogError(ex, "Exception while initiating single transfer for payout {PayoutId}", payoutSplit.Id);
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 

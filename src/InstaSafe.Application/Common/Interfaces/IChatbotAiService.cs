@@ -10,4 +10,11 @@ public class ChatbotIntentResult
 public interface IChatbotAiService
 {
     Task<ChatbotIntentResult> ParseIntentAsync(string message, CancellationToken cancellationToken = default);
+    Task<DisputeAnalysisResult> AnalyzeDisputeAsync(string itemDescription, string buyerReason, string? evidenceUrl, CancellationToken cancellationToken = default);
+}
+
+public class DisputeAnalysisResult
+{
+    public int ConfidenceScore { get; set; } // 0-100
+    public string Summary { get; set; } = string.Empty;
 }

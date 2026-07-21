@@ -22,6 +22,7 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
     private readonly MonnifyOptions _options;
     private readonly IMediator _mediator;
     private readonly IWhatsAppMessagingService _whatsappService;
+    private readonly IEmailService _emailService;
 
     public ProcessMonnifyWebhookCommandHandler(
         IUnitOfWork unitOfWork,
@@ -29,7 +30,8 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
         ILogger<ProcessMonnifyWebhookCommandHandler> logger,
         IOptions<MonnifyOptions> options,
         IMediator mediator,
-        IWhatsAppMessagingService whatsappService)
+        IWhatsAppMessagingService whatsappService,
+        IEmailService emailService)
     {
         _unitOfWork = unitOfWork;
         _dateTimeProvider = dateTimeProvider;
@@ -37,6 +39,7 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
         _options = options.Value;
         _mediator = mediator;
         _whatsappService = whatsappService;
+        _emailService = emailService;
     }
 
     public async Task<Result<bool>> Handle(ProcessMonnifyWebhookCommand request, CancellationToken cancellationToken)
@@ -94,7 +97,7 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
             return Result<bool>.Success(true);
         }
 
-        var order = await _unitOfWork.Orders.GetByIdWithMerchantAsync(escrowTx.OrderId, cancellationToken);
+        var order = await _unitOfWork.Orders.GetByIdWithAllAsync(escrowTx.OrderId, cancellationToken);
         if (order == null)
         {
             _logger.LogError($"Order {escrowTx.OrderId} not found for transaction {paymentReference}.");
@@ -111,7 +114,6 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
             EventType = eventType,
             RawPayload = request.Payload,
             ProcessedAt = _dateTimeProvider.UtcNow,
-            // IsSuccessful doesn't exist, remove it
         };
         _unitOfWork.WebhookEventLogs.Add(webhookLog);
 
@@ -121,21 +123,44 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
 
         _logger.LogInformation($"Successfully processed payment for order {order.Id}");
 
-        // Automated Merchant Handoff Flow
-        if (order.Merchant != null && !string.IsNullOrEmpty(order.Merchant.Phone))
+        // Automated Handoff Flow - Notify Both Parties with QR Codes
+        var qrResult = await _mediator.Send(new GenerateDeliveryQrCodesCommand(order.Id), cancellationToken);
+        if (qrResult.Succeeded && qrResult.Data != null)
         {
-            var qrResult = await _mediator.Send(new GenerateDeliveryQrCodesCommand(order.Id), cancellationToken);
-            if (qrResult.Succeeded && qrResult.Data != null)
-            {
-                string message = $"InstaSafe Alert ✅\n\n" +
-                                 $"Great news! Your customer has paid for Order #{order.OrderReference} ({order.ItemName}).\n" +
-                                 $"The funds are now securely held in Escrow.\n\n" +
-                                 $"When the dispatcher arrives to pick up the item, please show them this Pickup QR Code Token to confirm pickup:\n" +
-                                 $"*{qrResult.Data.MerchantQrToken}*\n\n" +
-                                 $"Do not give the item to the dispatcher until they successfully scan this code.";
+            var noReplyNote = "\n\n(Please do not reply to this automated message.)";
 
-                await _whatsappService.SendMessageAsync(order.Merchant.Phone, message, cancellationToken);
-                _logger.LogInformation($"Dispatched Merchant QR code via WhatsApp to {order.Merchant.Phone} for Order {order.Id}");
+            // 1. Notify Merchant
+            if (order.Merchant != null)
+            {
+                var merchantEmailMsg = $"The escrow payment for your order <b>{order.ItemName}</b> has been successfully funded.<br/><br/>This is your pickup QR code token: <b>{qrResult.Data.MerchantQrToken}</b>. Please show this to the dispatcher once they come to pick up the item.";
+                await _emailService.SendEmailAsync(order.Merchant.Email, "Escrow Funded - Action Required", merchantEmailMsg, cancellationToken);
+
+                if (!string.IsNullOrEmpty(order.Merchant.Phone))
+                {
+                    string merchantWaMsg = $"InstaSafe Alert ✅\n\n" +
+                                           $"The escrow payment for your order #{order.OrderReference} has been successfully funded!\n\n" +
+                                           $"This is your pickup QR code token that you will show the dispatcher once they come to pick up:\n" +
+                                           $"*{qrResult.Data.MerchantQrToken}*" +
+                                           noReplyNote;
+                    await _whatsappService.SendMessageAsync(order.Merchant.Phone, merchantWaMsg, cancellationToken);
+                }
+            }
+
+            // 2. Notify Buyer
+            if (order.Buyer != null)
+            {
+                var buyerEmailMsg = $"Your payment was successful and the funds are now securely held in escrow.<br/><br/>This is your delivery QR code token: <b>{qrResult.Data.BuyerQrToken}</b>. Please show this to the dispatcher to confirm you have received the item.";
+                await _emailService.SendEmailAsync(order.Buyer.Email, "Payment Successful", buyerEmailMsg, cancellationToken);
+
+                if (!string.IsNullOrEmpty(order.Buyer.Phone))
+                {
+                    string buyerWaMsg = $"InstaSafe Alert ✅\n\n" +
+                                        $"Your payment for Order #{order.OrderReference} was successful!\n\n" +
+                                        $"This is your delivery QR code token that you will show the dispatcher to confirm receipt:\n" +
+                                        $"*{qrResult.Data.BuyerQrToken}*" +
+                                        noReplyNote;
+                    await _whatsappService.SendMessageAsync(order.Buyer.Phone, buyerWaMsg, cancellationToken);
+                }
             }
         }
 
@@ -144,11 +169,11 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
 
     private bool IsValidSignature(string payload, string signatureHeader)
     {
-        var keyBytes = Encoding.UTF8.GetBytes(_options.SecretKey);
-        var payloadBytes = Encoding.UTF8.GetBytes(payload);
+        var input = _options.SecretKey + payload;
+        var inputBytes = Encoding.UTF8.GetBytes(input);
 
-        using var hmac = new HMACSHA512(keyBytes);
-        var hashBytes = hmac.ComputeHash(payloadBytes);
+        using var sha512 = SHA512.Create();
+        var hashBytes = sha512.ComputeHash(inputBytes);
         var calculatedSignature = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
 
         return string.Equals(calculatedSignature, signatureHeader, StringComparison.OrdinalIgnoreCase);

@@ -59,7 +59,12 @@ public class MonnifyClient : IMonnifyPaymentService
 
         if (body != null)
         {
-            var json = JsonSerializer.Serialize(body, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            var options = new JsonSerializerOptions 
+            { 
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            };
+            var json = JsonSerializer.Serialize(body, options);
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
         }
 
