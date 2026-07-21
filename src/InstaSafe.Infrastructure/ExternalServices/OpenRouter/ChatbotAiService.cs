@@ -41,8 +41,9 @@ public class ChatbotAiService : IChatbotAiService
                         content = "You are an NLP intent parser for the InstaSafe WhatsApp chatbot. " +
                                   "Users will send messages to either create a new escrow order, check the status of an existing order, or ask general questions. " +
                                   "Extract the intent as 'CreateOrder', 'CheckStatus', or 'Unknown'. " +
-                                  "If they want to create an order, extract the following into the 'ExtractedData' field as a JSON string with keys: 'Item' (string), 'Price' (number), and 'Location' (string). " +
-                                  "If ANY of these 3 fields are missing or unclear, provide a helpful 'ReplyMessage' asking the user for the missing details. If all 3 are present, leave 'ReplyMessage' empty. " +
+                                  "If they want to create an order, extract the following into the 'ExtractedData' field as a JSON string with keys: 'Item' (string), 'Price' (number), 'Location' (string), and 'BuyerPhone' (string). " +
+                                  "Ensure 'BuyerPhone' is formatted with the international country code (e.g., +234). " +
+                                  "If ANY of these 4 fields are missing or unclear, provide a helpful 'ReplyMessage' asking the user for the missing details. If all 4 are present, leave 'ReplyMessage' empty. " +
                                   "If the intent is 'Unknown', provide a helpful 'ReplyMessage' asking them to clarify if they want to create an order or check a status. " +
                                   "Return STRICTLY JSON: { \"Intent\": string, \"ExtractedData\": string, \"ReplyMessage\": string }."
                     },

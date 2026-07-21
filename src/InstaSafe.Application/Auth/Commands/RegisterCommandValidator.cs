@@ -30,6 +30,9 @@ public class RegisterCommandValidator : AbstractValidator<RegisterCommand>
         RuleFor(v => v.DateOfBirth)
             .NotEmpty().WithMessage("Date of birth is required.")
             .Must(BeAtLeast18YearsOld).WithMessage("You must be at least 18 years old to register.");
+        RuleFor(v => v.Phone)
+            .NotEmpty().WithMessage("Phone number is required.")
+            .Matches(@"^\+[1-9]\d{10,14}$").WithMessage("Phone number must include country code (e.g., +2348012345678).");
     }
 
     private bool BeAtLeast18YearsOld(DateTime dateOfBirth)

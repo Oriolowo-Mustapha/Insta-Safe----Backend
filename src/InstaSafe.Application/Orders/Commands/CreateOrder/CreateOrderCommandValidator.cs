@@ -30,6 +30,11 @@ public class CreateOrderCommandValidator : AbstractValidator<CreateOrderCommand>
             .EmailAddress().WithMessage("A valid email address is required.");
 
         RuleFor(v => v.BuyerPhone)
-            .NotEmpty().WithMessage("Buyer phone is required.");
+            .NotEmpty().WithMessage("Buyer phone is required.")
+            .Matches(@"^\+[1-9]\d{10,14}$").WithMessage("Phone number must include country code (e.g., +234...).");
+
+        RuleFor(v => v.DispatcherPhone)
+            .Matches(@"^\+[1-9]\d{10,14}$").WithMessage("Phone number must include country code (e.g., +234...).")
+            .When(v => !string.IsNullOrEmpty(v.DispatcherPhone));
     }
 }
