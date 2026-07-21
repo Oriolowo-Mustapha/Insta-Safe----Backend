@@ -9,6 +9,8 @@ using System.Text.Json;
 
 using Microsoft.Extensions.Configuration;
 
+using Microsoft.Extensions.Options;
+
 namespace InstaSafe.Application.Chatbot.Commands;
 
 public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbotMessageCommand, Result<string>>
@@ -19,6 +21,8 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
     private readonly IMonnifyPaymentService _monnifyPaymentService;
     private readonly IDateTimeProvider _dateTimeProvider;
     private readonly IConfiguration _configuration;
+    private readonly IFraudScoringEngine _fraudScoringEngine;
+    private readonly MonnifyOptions _options;
 
     public ProcessChatbotMessageCommandHandler(
         IUnitOfWork unitOfWork, 
@@ -26,7 +30,9 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
         IWhatsAppMessagingService messagingService,
         IMonnifyPaymentService monnifyPaymentService,
         IDateTimeProvider dateTimeProvider,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IFraudScoringEngine fraudScoringEngine,
+        IOptions<MonnifyOptions> options)
     {
         _unitOfWork = unitOfWork;
         _aiService = aiService;
@@ -34,6 +40,8 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
         _monnifyPaymentService = monnifyPaymentService;
         _dateTimeProvider = dateTimeProvider;
         _configuration = configuration;
+        _fraudScoringEngine = fraudScoringEngine;
+        _options = options.Value;
     }
 
     public async Task<Result<string>> Handle(ProcessChatbotMessageCommand request, CancellationToken cancellationToken)
@@ -173,47 +181,79 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                     var itemVal = finalData["Item"].GetString() ?? "Order via Chatbot";
                     var locationVal = finalData["Location"].GetString() ?? "Unknown Location";
                     
+                    var riskResult = await _fraudScoringEngine.EvaluateMerchantRiskAsync(merchant, cancellationToken);
+                    
+                    if (riskResult.RiskLevel == "High")
+                    {
+                        replyMessage = $"Transaction blocked due to high fraud risk. Reason: {string.Join(", ", riskResult.Factors)}";
+                        session.Reset();
+                        break;
+                    }
+
+                    var today = _dateTimeProvider.UtcNow.ToString("yyyyMMdd");
+                    var prefix = $"INSTA-ORD-{today}";
+                    var count = await _unitOfWork.Orders.CountOrdersByReferencePrefixAsync(prefix, cancellationToken);
+                    var randomSuffix = Guid.NewGuid().ToString("N").Substring(0, 5).ToUpper();
+                    var orderReference = $"{prefix}-{(count + 1):D4}-{randomSuffix}";
+
                     var newOrder = new Order
                     {
-                        OrderReference = "CB-" + Guid.NewGuid().ToString("N").Substring(0, 6).ToUpper(),
+                        Id = Guid.NewGuid(),
+                        OrderReference = orderReference,
                         MerchantId = merchant!.Id,
                         ItemName = itemVal,
                         Price = amountVal,
-                        ItemDescription = $"Delivery to {locationVal}"
+                        ItemDescription = $"Delivery to {locationVal}",
+                        RiskScore = riskResult.Score,
+                        RiskLevel = riskResult.RiskLevel
                     };
-                    
-                    _unitOfWork.Orders.Add(newOrder);
-                    await _unitOfWork.SaveChangesAsync(cancellationToken);
 
                     var frontendUrl = _configuration["FrontendUrl:Production"] ?? "https://instasafe.vercel.app";
                     var initRequest = new InitTransactionRequest(
                         Amount: amountVal,
                         CustomerName: merchant.BusinessName,
-                        CustomerEmail: "buyer@example.com", 
+                        CustomerEmail: merchant.Email, // using merchant email since buyer is unknown via chatbot
                         PaymentReference: newOrder.OrderReference,
-                        PaymentDescription: $"Escrow for {itemVal}",
+                        PaymentDescription: $"InstaSafe Escrow: {itemVal}",
                         CurrencyCode: "NGN",
-                        ContractCode: "YOUR_CONTRACT_CODE", 
+                        ContractCode: _options.ContractCode, 
                         RedirectUrl: $"{frontendUrl}/order/{newOrder.OrderReference}",
-                        PaymentMethods: new[] { "CARD", "ACCOUNT_TRANSFER" },
+                        PaymentMethods: new[] { "CARD", "ACCOUNT_TRANSFER", "USSD" },
                         IncomeSplitConfig: null
                     );
 
                     try
                     {
                         var paymentResult = await _monnifyPaymentService.InitializeTransactionAsync(initRequest, cancellationToken);
-                        if (paymentResult.RequestSuccessful && paymentResult.ResponseBody != null)
+                        if (paymentResult.RequestSuccessful && paymentResult.ResponseBody != null && !string.IsNullOrEmpty(paymentResult.ResponseBody.CheckoutUrl))
                         {
+                            var escrowTransaction = new EscrowTransaction
+                            {
+                                OrderId = newOrder.Id,
+                                MonnifyTransactionReference = paymentResult.ResponseBody.TransactionReference,
+                                CheckoutUrl = paymentResult.ResponseBody.CheckoutUrl,
+                                TransactionReference = newOrder.OrderReference,
+                                Channel = InstaSafe.Domain.Enums.PaymentChannel.Card,
+                                Amount = newOrder.Price
+                            };
+
+                            newOrder.GenerateEscrowLink(paymentResult.ResponseBody.CheckoutUrl, _dateTimeProvider.UtcNow.AddMinutes(60));
+                            newOrder.AddDomainEvent(new InstaSafe.Domain.Events.OrderCreatedEvent(newOrder.Id));
+
+                            _unitOfWork.Orders.Add(newOrder);
+                            _unitOfWork.EscrowTransactions.Add(escrowTransaction);
+                            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
                             replyMessage = $"Success! Order *{newOrder.OrderReference}* created.\n\nHere's your escrow link: {paymentResult.ResponseBody.CheckoutUrl}\nShare with your buyer.";
                         }
                         else
                         {
-                            replyMessage = $"Order created (*{newOrder.OrderReference}*) but failed to generate payment link: {paymentResult.ResponseMessage}";
+                            replyMessage = $"Order created but failed to generate payment link: {paymentResult.ResponseMessage}";
                         }
                     }
                     catch (Exception)
                     {
-                        replyMessage = $"Order *{newOrder.OrderReference}* created, but there was an error connecting to the payment provider. We will retry link generation later.";
+                        replyMessage = $"There was an error connecting to the payment provider. We could not create the order. Please try again later.";
                     }
 
                     session.Reset();
