@@ -30,8 +30,8 @@ public class ChatbotController : ControllerBase
         if (payload.Event != "message.received" || payload.Data == null)
             return Ok();
 
-        var messageType = payload.Data.Type;
-        if ((messageType != "text" && messageType != "chat") || string.IsNullOrWhiteSpace(payload.Data.Body))
+        var messageType = payload.Data.Type ?? "chat";
+        if (messageType != "text" && messageType != "chat" && messageType != "image")
             return Ok();
 
         // OpenWA sends "from" as "2348xxxxxxxxx@c.us" — strip the @c.us suffix to get the phone number
@@ -40,7 +40,9 @@ public class ChatbotController : ControllerBase
         if (string.IsNullOrWhiteSpace(phoneNumber))
             return Ok();
 
-        var command = new ProcessChatbotMessageCommand(phoneNumber, payload.Data.Body);
+        var body = payload.Data.Body ?? "";
+
+        var command = new ProcessChatbotMessageCommand(phoneNumber, body, messageType);
         await _sender.Send(command);
 
         return Ok();

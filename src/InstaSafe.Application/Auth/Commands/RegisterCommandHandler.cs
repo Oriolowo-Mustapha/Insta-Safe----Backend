@@ -4,6 +4,8 @@ using InstaSafe.Domain.Entities;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
+using Microsoft.Extensions.Configuration;
+
 namespace InstaSafe.Application.Auth.Commands;
 
 public class RegisterCommandHandler : IRequestHandler<RegisterCommand, Result<string>>
@@ -13,19 +15,22 @@ public class RegisterCommandHandler : IRequestHandler<RegisterCommand, Result<st
     private readonly IJwtTokenGenerator _tokenGenerator;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IEmailService _emailService;
+    private readonly IConfiguration _configuration;
 
     public RegisterCommandHandler(
         IApplicationDbContext context,
         IUnitOfWork unitOfWork,
         IJwtTokenGenerator tokenGenerator,
         IPasswordHasher passwordHasher,
-        IEmailService emailService)
+        IEmailService emailService,
+        IConfiguration configuration)
     {
         _context = context;
         _unitOfWork = unitOfWork;
         _tokenGenerator = tokenGenerator;
         _passwordHasher = passwordHasher;
         _emailService = emailService;
+        _configuration = configuration;
     }
 
     public async Task<Result<string>> Handle(RegisterCommand request, CancellationToken ct)
@@ -81,8 +86,8 @@ public class RegisterCommandHandler : IRequestHandler<RegisterCommand, Result<st
 
         await _unitOfWork.SaveChangesAsync(ct);
 
-        // Send email
-        var verifyLink = $"http://localhost:5173/auth/verify-email?email={user.Email}&token={Uri.EscapeDataString(verificationToken)}";
+        var frontendUrl = _configuration["FrontendUrl:Production"] ?? "https://instasafe.vercel.app";
+        var verifyLink = $"{frontendUrl}/auth/verify-email?email={user.Email}&token={Uri.EscapeDataString(verificationToken)}";
         await _emailService.SendEmailAsync(user.Email, "Verify your InstaSafe Account", 
             $"Please verify your account by clicking this link: <a href=\"{verifyLink}\">{verifyLink}</a>", ct);
 

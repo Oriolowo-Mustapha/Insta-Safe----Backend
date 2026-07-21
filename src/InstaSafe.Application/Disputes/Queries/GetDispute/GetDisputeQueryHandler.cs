@@ -36,7 +36,9 @@ public class GetDisputeQueryHandler : IRequestHandler<GetDisputeQuery, Result<Di
             dispute.Resolution,
             dispute.ResolvedAt,
             dispute.ResolvedBy,
-            dispute.CreatedAt
+            dispute.CreatedAt,
+            dispute.AiConfidenceScore,
+            dispute.AiAnalysisSummary
         );
 
         return Result<DisputeDto>.Success(dto);

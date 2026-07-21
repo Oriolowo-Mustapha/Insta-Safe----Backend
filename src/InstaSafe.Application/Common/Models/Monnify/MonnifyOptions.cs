@@ -7,4 +7,5 @@ public class MonnifyOptions
     public string ApiKey { get; set; } = string.Empty;
     public string SecretKey { get; set; } = string.Empty;
     public string ContractCode { get; set; } = string.Empty;
+    public string WalletAccountNumber { get; set; } = string.Empty;
 }

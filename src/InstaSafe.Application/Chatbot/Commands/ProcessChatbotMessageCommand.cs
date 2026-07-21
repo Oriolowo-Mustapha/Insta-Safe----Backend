@@ -3,4 +3,4 @@ using MediatR;
 
 namespace InstaSafe.Application.Chatbot.Commands;
 
-public record ProcessChatbotMessageCommand(string PhoneNumber, string MessageText) : IRequest<Result<string>>;
+public record ProcessChatbotMessageCommand(string PhoneNumber, string MessageText, string MessageType = "chat") : IRequest<Result<string>>;

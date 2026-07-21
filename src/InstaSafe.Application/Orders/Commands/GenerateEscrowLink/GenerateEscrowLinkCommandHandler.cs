@@ -7,6 +7,8 @@ using InstaSafe.Domain.Events;
 using MediatR;
 using Microsoft.Extensions.Options;
 
+using Microsoft.Extensions.Configuration;
+
 namespace InstaSafe.Application.Orders.Commands.GenerateEscrowLink;
 
 public class GenerateEscrowLinkCommandHandler : IRequestHandler<GenerateEscrowLinkCommand, Result<EscrowLinkResponse>>
@@ -15,17 +17,20 @@ public class GenerateEscrowLinkCommandHandler : IRequestHandler<GenerateEscrowLi
     private readonly IMonnifyPaymentService _monnifyClient;
     private readonly IDateTimeProvider _dateTimeProvider;
     private readonly MonnifyOptions _options;
+    private readonly IConfiguration _configuration;
 
     public GenerateEscrowLinkCommandHandler(
         IUnitOfWork unitOfWork,
         IMonnifyPaymentService monnifyClient,
         IDateTimeProvider dateTimeProvider,
-        IOptions<MonnifyOptions> options)
+        IOptions<MonnifyOptions> options,
+        IConfiguration configuration)
     {
         _unitOfWork = unitOfWork;
         _monnifyClient = monnifyClient;
         _dateTimeProvider = dateTimeProvider;
         _options = options.Value;
+        _configuration = configuration;
     }
 
     public async Task<Result<EscrowLinkResponse>> Handle(GenerateEscrowLinkCommand request, CancellationToken cancellationToken)
@@ -67,6 +72,7 @@ public class GenerateEscrowLinkCommandHandler : IRequestHandler<GenerateEscrowLi
             }
         }
 
+        var frontendUrl = _configuration["FrontendUrl:Production"] ?? "https://instasafe.vercel.app";
         var initReq = new InitTransactionRequest(
             order.Price,
             $"{request.BuyerFirstName} {request.BuyerLastName}",
@@ -75,7 +81,7 @@ public class GenerateEscrowLinkCommandHandler : IRequestHandler<GenerateEscrowLi
             $"InstaSafe Escrow: {order.ItemName}",
             "NGN",
             _options.ContractCode,
-            "http://localhost:5173", // Replace with actual redirect
+            $"{frontendUrl}/order/{order.OrderReference}", 
             new[] { "CARD", "ACCOUNT_TRANSFER", "USSD" },
             new[]
             {

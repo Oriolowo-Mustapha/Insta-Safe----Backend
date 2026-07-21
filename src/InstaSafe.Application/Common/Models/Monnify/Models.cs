@@ -51,6 +51,7 @@ public record SingleTransferRequest(
     string Narration,
     string DestinationBankCode,
     string DestinationAccountNumber,
+    string DestinationAccountName,
     string Currency,
     string SourceAccountNumber);
 
@@ -71,8 +72,8 @@ public record RefundRequest(
     string RefundReference,
     string RefundReason,
     string CustomerNote,
-    string DestinationAccountNumber,
-    string DestinationAccountBankCode);
+    string? DestinationAccountNumber = null,
+    string? DestinationAccountBankCode = null);
 
 public record RefundResponse(
     string RefundReference,

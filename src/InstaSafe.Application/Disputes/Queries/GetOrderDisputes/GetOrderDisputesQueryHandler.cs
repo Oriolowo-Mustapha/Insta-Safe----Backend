@@ -34,7 +34,9 @@ public class GetOrderDisputesQueryHandler : IRequestHandler<GetOrderDisputesQuer
             order.Dispute.Resolution,
             order.Dispute.ResolvedAt,
             order.Dispute.ResolvedBy,
-            order.Dispute.CreatedAt
+            order.Dispute.CreatedAt,
+            order.Dispute.AiConfidenceScore,
+            order.Dispute.AiAnalysisSummary
         );
 
         return Result<DisputeDto?>.Success(dto);

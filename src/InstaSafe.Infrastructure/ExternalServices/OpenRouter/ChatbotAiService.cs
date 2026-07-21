@@ -77,4 +77,63 @@ public class ChatbotAiService : IChatbotAiService
             return new ChatbotIntentResult { Intent = "Unknown", ReplyMessage = "Sorry, our AI service is currently down." };
         }
     }
+
+    public async Task<DisputeAnalysisResult> AnalyzeDisputeAsync(string itemDescription, string buyerReason, string? evidenceUrl, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var contentList = new List<object>
+            {
+                new { 
+                    type = "text", 
+                    text = $"You are an AI Dispute Resolution Assistant for InstaSafe. The merchant originally listed the item as: '{itemDescription}'. The buyer has now raised a dispute stating: '{buyerReason}'. Please analyze the provided image evidence against the merchant's description. Evaluate if the buyer's claim is valid. Return STRICTLY a JSON object with 'ConfidenceScore' (0-100 integer representing how confident you are that the buyer is correct) and 'Summary' (1-2 sentence explanation of your verdict)." 
+                }
+            };
+
+            if (!string.IsNullOrEmpty(evidenceUrl))
+            {
+                contentList.Add(new
+                {
+                    type = "image_url",
+                    image_url = new { url = evidenceUrl }
+                });
+            }
+
+            var requestBody = new
+            {
+                model = "google/gemini-1.5-pro", // High accuracy vision model via OpenRouter
+                response_format = new { type = "json_object" },
+                messages = new[]
+                {
+                    new
+                    {
+                        role = "user",
+                        content = contentList
+                    }
+                }
+            };
+
+            var jsonContent = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.PostAsync("", jsonContent, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var responseString = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var document = JsonDocument.Parse(responseString);
+            var contentString = document.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
+
+            if (contentString == null)
+            {
+                return new DisputeAnalysisResult { ConfidenceScore = 0, Summary = "Failed to generate AI analysis." };
+            }
+
+            var result = JsonSerializer.Deserialize<DisputeAnalysisResult>(contentString, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return result ?? new DisputeAnalysisResult { ConfidenceScore = 0, Summary = "Failed to parse AI response." };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to analyze dispute via OpenRouter Vision API.");
+            return new DisputeAnalysisResult { ConfidenceScore = 0, Summary = "AI Vision analysis is currently unavailable." };
+        }
+    }
 }
