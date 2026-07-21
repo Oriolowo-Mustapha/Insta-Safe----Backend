@@ -135,23 +135,24 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                         try
                         {
                             var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(aiResult.ExtractedData ?? "{}");
-                            if (data != null && data.TryGetValue("Item", out var itemEl) && data.TryGetValue("Price", out var priceEl) && data.TryGetValue("Location", out var locationEl))
+                            if (data != null && data.TryGetValue("Item", out var itemEl) && data.TryGetValue("Price", out var priceEl) && data.TryGetValue("Location", out var locationEl) && data.TryGetValue("BuyerPhone", out var buyerPhoneEl))
                             {
                                 var item = itemEl.GetString();
                                 var price = priceEl.GetDecimal();
                                 var location = locationEl.GetString();
+                                var buyerPhone = buyerPhoneEl.GetString();
 
                                 session.UpdateState(ChatbotState.ConfirmingOrder, aiResult.ExtractedData);
-                                replyMessage = $"Got it! {item}, N{price:N0}, delivery to {location}. Confirm? (Yes/No)";
+                                replyMessage = $"Got it! {item}, N{price:N0}, delivery to {location}, Buyer Phone: {buyerPhone}. Confirm? (Yes/No)";
                             }
                             else
                             {
-                                replyMessage = "I couldn't extract all the details. Could you please specify the item, price, and delivery location clearly?";
+                                replyMessage = "I couldn't extract all the details. Could you please specify the item, price, delivery location, and the buyer's phone number with country code (+234...)?";
                             }
                         }
                         catch
                         {
-                            replyMessage = "I couldn't process the order details. Please try again with the item, price, and location.";
+                            replyMessage = "I couldn't process the order details. Please try again with the item, price, location, and buyer's phone number.";
                         }
                     }
                 }
@@ -180,6 +181,7 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                     var amountVal = finalData["Price"].GetDecimal();
                     var itemVal = finalData["Item"].GetString() ?? "Order via Chatbot";
                     var locationVal = finalData["Location"].GetString() ?? "Unknown Location";
+                    var buyerPhoneVal = finalData.ContainsKey("BuyerPhone") ? finalData["BuyerPhone"].GetString() ?? "" : "";
                     
                     var riskResult = await _fraudScoringEngine.EvaluateMerchantRiskAsync(merchant, cancellationToken);
                     
@@ -189,6 +191,9 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                         session.Reset();
                         break;
                     }
+
+                    var buyer = await _unitOfWork.Buyers.GetOrCreateAsync(
+                        "unknown@example.com", "Chatbot", "Buyer", buyerPhoneVal, cancellationToken);
 
                     var today = _dateTimeProvider.UtcNow.ToString("yyyyMMdd");
                     var prefix = $"INSTA-ORD-{today}";
@@ -207,6 +212,8 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                         RiskScore = riskResult.Score,
                         RiskLevel = riskResult.RiskLevel
                     };
+                    
+                    newOrder.SetBuyer(buyer.Id);
 
                     var frontendUrl = _configuration["FrontendUrl:Production"] ?? "https://instasafe.vercel.app";
                     var initRequest = new InitTransactionRequest(
