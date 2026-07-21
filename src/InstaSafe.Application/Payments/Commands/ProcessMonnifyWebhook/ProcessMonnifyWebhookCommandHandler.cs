@@ -169,11 +169,11 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
 
     private bool IsValidSignature(string payload, string signatureHeader)
     {
-        var input = _options.SecretKey + payload;
-        var inputBytes = Encoding.UTF8.GetBytes(input);
+        var keyBytes = Encoding.UTF8.GetBytes(_options.SecretKey);
+        var payloadBytes = Encoding.UTF8.GetBytes(payload);
 
-        using var sha512 = SHA512.Create();
-        var hashBytes = sha512.ComputeHash(inputBytes);
+        using var hmac = new HMACSHA512(keyBytes);
+        var hashBytes = hmac.ComputeHash(payloadBytes);
         var calculatedSignature = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
 
         return string.Equals(calculatedSignature, signatureHeader, StringComparison.OrdinalIgnoreCase);
