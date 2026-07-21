@@ -30,7 +30,15 @@ public class DeleteOrderCommandHandler : IRequestHandler<DeleteOrderCommand, Res
         if (order == null)
             return Result<bool>.Failure("Order not found.");
 
-        if (order.MerchantId != request.MerchantId)
+        var merchant = await _context.Merchants.FirstOrDefaultAsync(m => m.UserId == request.MerchantId, cancellationToken);
+        if (merchant == null)
+        {
+            merchant = await _context.Merchants.FirstOrDefaultAsync(m => m.Id == request.MerchantId, cancellationToken);
+            if (merchant == null)
+                return Result<bool>.Failure("Merchant not found.");
+        }
+
+        if (order.MerchantId != merchant.Id)
             return Result<bool>.Failure("You do not have permission to delete this order.");
 
         if (order.Status != OrderStatus.Draft && order.Status != OrderStatus.PendingPayment)
