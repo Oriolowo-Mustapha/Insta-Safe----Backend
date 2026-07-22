@@ -81,7 +81,7 @@ public class GenerateEscrowLinkCommandHandler : IRequestHandler<GenerateEscrowLi
             $"InstaSafe Escrow: {order.ItemName}",
             "NGN",
             _options.ContractCode,
-            $"{frontendUrl}/order/{order.OrderReference}", 
+            $"{frontendUrl}/payment-success?reference={order.OrderReference}", 
             new[] { "CARD", "ACCOUNT_TRANSFER", "USSD" },
             new[]
             {

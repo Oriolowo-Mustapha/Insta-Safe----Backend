@@ -101,7 +101,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
             $"InstaSafe Escrow: {order.ItemName}",
             "NGN",
             _options.ContractCode,
-            $"{frontendUrl}/order/{order.OrderReference}", 
+            $"{frontendUrl}/payment-success?reference={order.OrderReference}", 
             new[] { "CARD", "ACCOUNT_TRANSFER", "USSD" },
             null // No split config, funds go to the main wallet
         );
