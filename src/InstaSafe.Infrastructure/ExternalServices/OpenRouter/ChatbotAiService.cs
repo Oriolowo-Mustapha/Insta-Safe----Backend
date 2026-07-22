@@ -41,11 +41,11 @@ public class ChatbotAiService : IChatbotAiService
                         content = "You are an NLP intent parser for the InstaSafe WhatsApp chatbot. " +
                                   "Users will send messages to either create a new escrow order, check the status of an existing order, or ask general questions. " +
                                   "Extract the intent as 'CreateOrder', 'CheckStatus', or 'Unknown'. " +
-                                  "If they want to create an order, extract the following into the 'ExtractedData' field as a JSON string with keys: 'Item' (string), 'Price' (number), 'Location' (string), and 'BuyerPhone' (string). " +
-                                  "Ensure 'BuyerPhone' is formatted with the international country code (e.g., +234). " +
-                                  "If ANY of these 4 fields are missing or unclear, provide a helpful 'ReplyMessage' asking the user for the missing details. If all 4 are present, leave 'ReplyMessage' empty. " +
+                                  "If they want to create an order, extract the following into the 'ExtractedData' field as a JSON string with keys: 'Item' (string), 'Description' (string), 'Price' (number), 'Location' (string), 'BuyerPhone' (string), 'BuyerEmail' (string), and 'DispatcherPhone' (string). " +
+                                  "Ensure 'BuyerPhone' and 'DispatcherPhone' are formatted with the international country code (e.g., +234). 'DispatcherPhone' can be empty if they don't have a rider yet. " +
+                                  "If ANY of these required fields (Item, Description, Price, Location, BuyerPhone, BuyerEmail) are missing or unclear, provide a helpful 'ReplyMessage' asking the user for the specific missing details. If all required fields are present, leave 'ReplyMessage' empty. " +
                                   "If the intent is 'Unknown', provide a helpful 'ReplyMessage' asking them to clarify if they want to create an order or check a status. " +
-                                  "Return STRICTLY JSON: { \"Intent\": string, \"ExtractedData\": string, \"ReplyMessage\": string }."
+                                  "Return STRICTLY JSON: { \"Intent\": string, \"ExtractedData\": string, \"ReplyMessage\": string }. Do not use markdown blocks."
                     },
                     new
                     {
