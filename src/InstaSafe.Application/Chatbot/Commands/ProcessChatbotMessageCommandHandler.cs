@@ -6,10 +6,9 @@ using InstaSafe.Domain.Enums;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
-
 using Microsoft.Extensions.Configuration;
-
 using Microsoft.Extensions.Options;
+using InstaSafe.Application.Orders.Commands.CreateOrder;
 
 namespace InstaSafe.Application.Chatbot.Commands;
 
@@ -23,6 +22,7 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
     private readonly IConfiguration _configuration;
     private readonly IFraudScoringEngine _fraudScoringEngine;
     private readonly MonnifyOptions _options;
+    private readonly ISender _sender;
 
     public ProcessChatbotMessageCommandHandler(
         IUnitOfWork unitOfWork, 
@@ -32,7 +32,8 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
         IDateTimeProvider dateTimeProvider,
         IConfiguration configuration,
         IFraudScoringEngine fraudScoringEngine,
-        IOptions<MonnifyOptions> options)
+        IOptions<MonnifyOptions> options,
+        ISender sender)
     {
         _unitOfWork = unitOfWork;
         _aiService = aiService;
@@ -42,6 +43,7 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
         _configuration = configuration;
         _fraudScoringEngine = fraudScoringEngine;
         _options = options.Value;
+        _sender = sender;
     }
 
     public async Task<Result<string>> Handle(ProcessChatbotMessageCommand request, CancellationToken cancellationToken)
@@ -135,7 +137,7 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                         try
                         {
                             var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(aiResult.ExtractedData ?? "{}");
-                            if (data != null && data.TryGetValue("Item", out var itemEl) && data.TryGetValue("Price", out var priceEl) && data.TryGetValue("Location", out var locationEl) && data.TryGetValue("BuyerPhone", out var buyerPhoneEl))
+                            if (data != null && data.TryGetValue("ItemName", out var itemEl) && data.TryGetValue("Price", out var priceEl) && data.TryGetValue("BuyerFirstName", out var fnEl) && data.TryGetValue("BuyerLastName", out var lnEl) && data.TryGetValue("BuyerEmail", out var emailEl) && data.TryGetValue("BuyerPhone", out var phoneEl))
                             {
                                 var item = itemEl.ValueKind == JsonValueKind.String ? itemEl.GetString() : itemEl.ToString();
                                 
@@ -143,22 +145,26 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                                 if (priceEl.ValueKind == JsonValueKind.Number) price = priceEl.GetDecimal();
                                 else decimal.TryParse(priceEl.GetString()?.Replace(",", "").Replace("N", ""), out price);
                                 
-                                var location = locationEl.ValueKind == JsonValueKind.String ? locationEl.GetString() : locationEl.ToString();
-                                var buyerPhone = buyerPhoneEl.ValueKind == JsonValueKind.String ? buyerPhoneEl.GetString() : buyerPhoneEl.ToString();
+                                var buyerFirstName = fnEl.ValueKind == JsonValueKind.String ? fnEl.GetString() : fnEl.ToString();
+                                var buyerLastName = lnEl.ValueKind == JsonValueKind.String ? lnEl.GetString() : lnEl.ToString();
+                                var buyerPhone = phoneEl.ValueKind == JsonValueKind.String ? phoneEl.GetString() : phoneEl.ToString();
+                                var buyerEmail = emailEl.ValueKind == JsonValueKind.String ? emailEl.GetString() : emailEl.ToString();
                                 
-                                var desc = data.TryGetValue("Description", out var dEl) ? (dEl.ValueKind == JsonValueKind.String ? dEl.GetString() : dEl.ToString()) : "Order via Chatbot";
-                                var buyerEmail = data.TryGetValue("BuyerEmail", out var eEl) ? (eEl.ValueKind == JsonValueKind.String ? eEl.GetString() : eEl.ToString()) : "unknown@example.com";
+                                var desc = data.TryGetValue("Description", out var dEl) ? (dEl.ValueKind == JsonValueKind.String ? dEl.GetString() : dEl.ToString()) : "";
+                                var location = data.TryGetValue("DeliveryAddress", out var lEl) ? (lEl.ValueKind == JsonValueKind.String ? lEl.GetString() : lEl.ToString()) : "";
                                 var dispatcherPhone = data.TryGetValue("DispatcherPhone", out var dpEl) ? (dpEl.ValueKind == JsonValueKind.String ? dpEl.GetString() : dpEl.ToString()) : "";
 
                                 if (string.IsNullOrWhiteSpace(buyerEmail) || !buyerEmail.Contains("@")) buyerEmail = "unknown@example.com";
                                 
                                 session.UpdateState(ChatbotState.ConfirmingOrder, JsonSerializer.Serialize(new {
-                                    Item = item,
+                                    ItemName = item,
                                     Price = price,
-                                    Location = location,
-                                    BuyerPhone = buyerPhone,
                                     Description = desc,
+                                    BuyerFirstName = buyerFirstName,
+                                    BuyerLastName = buyerLastName,
                                     BuyerEmail = buyerEmail,
+                                    BuyerPhone = buyerPhone,
+                                    DeliveryAddress = location,
                                     DispatcherPhone = dispatcherPhone
                                 }));
 
@@ -166,14 +172,16 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                                                $"- Item: {item}\n" +
                                                $"- Description: {desc}\n" +
                                                $"- Price: N{price:N0}\n" +
+                                               $"- Buyer: {buyerFirstName} {buyerLastName}\n" +
+                                               $"- Email: {buyerEmail}\n" +
+                                               $"- Phone: {buyerPhone}\n" +
                                                $"- Delivery To: {location}\n" +
-                                               $"- Buyer: {buyerEmail} ({buyerPhone})\n" +
                                                $"- Dispatcher: {(string.IsNullOrWhiteSpace(dispatcherPhone) ? "None yet" : dispatcherPhone)}\n\n" +
                                                $"Confirm? (Yes/No)";
                             }
                             else
                             {
-                                replyMessage = "I couldn't extract all the required details (Item, Price, Location, Buyer Phone). Could you please provide them?";
+                                replyMessage = "I couldn't extract all the required details (Item Name, Price, First Name, Last Name, Email, Phone). Please ensure you provide all of them.";
                             }
                         }
                         catch
@@ -207,97 +215,45 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                     {
                         var finalData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(session.TemporaryData ?? "{}");
                         var amountVal = finalData.TryGetValue("Price", out var pEl) ? (pEl.ValueKind == JsonValueKind.Number ? pEl.GetDecimal() : decimal.Parse(pEl.GetString() ?? "0")) : 0;
-                        var itemVal = finalData.TryGetValue("Item", out var iEl) ? iEl.GetString() ?? "Order via Chatbot" : "Order via Chatbot";
-                        var locationVal = finalData.TryGetValue("Location", out var lEl) ? lEl.GetString() ?? "Unknown Location" : "Unknown Location";
-                        var buyerPhoneVal = finalData.TryGetValue("BuyerPhone", out var bpEl) ? bpEl.GetString() ?? "" : "";
-                        var descVal = finalData.TryGetValue("Description", out var dEl) ? dEl.GetString() ?? "" : "";
+                        var itemVal = finalData.TryGetValue("ItemName", out var iEl) ? iEl.GetString() ?? "Order via Chatbot" : "Order via Chatbot";
+                        var descVal = finalData.TryGetValue("Description", out var dEl) ? dEl.GetString() : null;
+                        var locationVal = finalData.TryGetValue("DeliveryAddress", out var lEl) ? lEl.GetString() : null;
+                        
+                        var buyerFirstName = finalData.TryGetValue("BuyerFirstName", out var fnEl) ? fnEl.GetString() ?? "Unknown" : "Unknown";
+                        var buyerLastName = finalData.TryGetValue("BuyerLastName", out var lnEl) ? lnEl.GetString() ?? "Buyer" : "Buyer";
                         var buyerEmailVal = finalData.TryGetValue("BuyerEmail", out var beEl) ? beEl.GetString() ?? "unknown@example.com" : "unknown@example.com";
-                        var dispatcherPhoneVal = finalData.TryGetValue("DispatcherPhone", out var dpEl) ? dpEl.GetString() ?? "" : "";
+                        var buyerPhoneVal = finalData.TryGetValue("BuyerPhone", out var bpEl) ? bpEl.GetString() ?? "" : "";
+                        var dispatcherPhoneVal = finalData.TryGetValue("DispatcherPhone", out var dpEl) ? dpEl.GetString() : null;
 
-                        var riskResult = await _fraudScoringEngine.EvaluateMerchantRiskAsync(merchant, cancellationToken);
-                        
-                        if (riskResult.RiskLevel == "High")
+                        var createCommand = new CreateOrderCommand(
+                            MerchantId: merchant!.Id,
+                            ItemName: itemVal,
+                            ItemDescription: descVal,
+                            ItemImageUrl: null,
+                            Price: amountVal,
+                            DeliveryAddress: locationVal,
+                            BuyerFirstName: buyerFirstName,
+                            BuyerLastName: buyerLastName,
+                            BuyerEmail: buyerEmailVal,
+                            BuyerPhone: buyerPhoneVal,
+                            DispatcherPhone: string.IsNullOrWhiteSpace(dispatcherPhoneVal) ? null : dispatcherPhoneVal
+                        );
+
+                        var result = await _sender.Send(createCommand, cancellationToken);
+
+                        if (result.Succeeded)
                         {
-                            replyMessage = $"Transaction blocked due to high fraud risk. Reason: {string.Join(", ", riskResult.Factors)}";
-                            session.Reset();
-                            break;
-                        }
-
-                        var buyer = await _unitOfWork.Buyers.GetOrCreateAsync(
-                            buyerEmailVal, "Chatbot", "Buyer", buyerPhoneVal, cancellationToken);
-
-                        var today = _dateTimeProvider.UtcNow.ToString("yyyyMMdd");
-                        var prefix = $"INSTA-ORD-{today}";
-                        var count = await _unitOfWork.Orders.CountOrdersByReferencePrefixAsync(prefix, cancellationToken);
-                        var randomSuffix = Guid.NewGuid().ToString("N").Substring(0, 5).ToUpper();
-                        var orderReference = $"{prefix}-{(count + 1):D4}-{randomSuffix}";
-
-                        var newOrder = new Order
-                        {
-                            Id = Guid.NewGuid(),
-                            OrderReference = orderReference,
-                            MerchantId = merchant!.Id,
-                            ItemName = itemVal,
-                            Price = amountVal,
-                            ItemDescription = string.IsNullOrWhiteSpace(descVal) ? $"Delivery to {locationVal}" : $"Delivery to {locationVal}. {descVal}",
-                            DispatcherPhone = string.IsNullOrWhiteSpace(dispatcherPhoneVal) ? null : dispatcherPhoneVal,
-                            RiskScore = riskResult.Score,
-                            RiskLevel = riskResult.RiskLevel
-                        };
-                        
-                        newOrder.SetBuyer(buyer.Id);
-
-                    var frontendUrl = _configuration["FrontendUrl:Production"] ?? "https://instasafe.vercel.app";
-                    var initRequest = new InitTransactionRequest(
-                        Amount: amountVal,
-                        CustomerName: merchant.BusinessName,
-                        CustomerEmail: merchant.Email, // using merchant email since buyer is unknown via chatbot
-                        PaymentReference: newOrder.OrderReference,
-                        PaymentDescription: $"InstaSafe Escrow: {itemVal}",
-                        CurrencyCode: "NGN",
-                        ContractCode: _options.ContractCode, 
-                        RedirectUrl: $"{frontendUrl}/payment-success?reference={newOrder.OrderReference}",
-                        PaymentMethods: new[] { "CARD", "ACCOUNT_TRANSFER", "USSD" },
-                        IncomeSplitConfig: null
-                    );
-
-                    try
-                    {
-                        var paymentResult = await _monnifyPaymentService.InitializeTransactionAsync(initRequest, cancellationToken);
-                        if (paymentResult.RequestSuccessful && paymentResult.ResponseBody != null && !string.IsNullOrEmpty(paymentResult.ResponseBody.CheckoutUrl))
-                        {
-                            var escrowTransaction = new EscrowTransaction
-                            {
-                                OrderId = newOrder.Id,
-                                MonnifyTransactionReference = paymentResult.ResponseBody.TransactionReference,
-                                CheckoutUrl = paymentResult.ResponseBody.CheckoutUrl,
-                                TransactionReference = newOrder.OrderReference,
-                                Channel = InstaSafe.Domain.Enums.PaymentChannel.Card,
-                                Amount = newOrder.Price
-                            };
-
-                            newOrder.GenerateEscrowLink(paymentResult.ResponseBody.CheckoutUrl, _dateTimeProvider.UtcNow.AddMinutes(60));
-                            newOrder.AddDomainEvent(new InstaSafe.Domain.Events.OrderCreatedEvent(newOrder.Id));
-
-                            _unitOfWork.Orders.Add(newOrder);
-                            _unitOfWork.EscrowTransactions.Add(escrowTransaction);
-                            await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-                            replyMessage = $"Success! Order *{newOrder.OrderReference}* created.\n\nHere's your escrow link: {paymentResult.ResponseBody.CheckoutUrl}\nShare with your buyer.";
+                            replyMessage = $"Success! Order *{result.Data.OrderReference}* has been created.\n\nThe escrow payment link has been sent directly to the buyer's WhatsApp and Email.";
                         }
                         else
                         {
-                            replyMessage = $"Order created but failed to generate payment link: {paymentResult.ResponseMessage}";
+                            replyMessage = $"Failed to create order: {result.Error}";
                         }
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
-                        replyMessage = $"There was an error connecting to the payment provider. We could not create the order. Please try again later.";
-                    }
-                    }
-                    catch (Exception)
-                    {
-                        replyMessage = "Sorry, I had trouble parsing the order details from our session. Please type 'I want to create an order' to start again.";
+                        System.IO.File.WriteAllText(@"C:\Users\MUSTAPHA\source\repos\Instasafe -- Backend\error_log.txt", ex.ToString());
+                        replyMessage = $"Sorry, I had trouble processing the order details. Please type 'I want to create an order' to start again. ({ex.Message})";
                     }
 
                     session.Reset();
