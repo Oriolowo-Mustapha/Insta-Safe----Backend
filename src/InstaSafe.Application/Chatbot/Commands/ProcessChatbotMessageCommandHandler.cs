@@ -224,7 +224,7 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                         PaymentDescription: $"InstaSafe Escrow: {itemVal}",
                         CurrencyCode: "NGN",
                         ContractCode: _options.ContractCode, 
-                        RedirectUrl: $"{frontendUrl}/order/{newOrder.OrderReference}",
+                        RedirectUrl: $"{frontendUrl}/payment-success?reference={newOrder.OrderReference}",
                         PaymentMethods: new[] { "CARD", "ACCOUNT_TRANSFER", "USSD" },
                         IncomeSplitConfig: null
                     );
