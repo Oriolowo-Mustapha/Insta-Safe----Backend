@@ -127,39 +127,50 @@ public class ProcessMonnifyWebhookCommandHandler : IRequestHandler<ProcessMonnif
         var qrResult = await _mediator.Send(new GenerateDeliveryQrCodesCommand(order.Id), cancellationToken);
         if (qrResult.Succeeded && qrResult.Data != null)
         {
+            var merchantQrUrl = $"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qrResult.Data.MerchantQrToken}";
+            var buyerQrUrl = $"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={qrResult.Data.BuyerQrToken}";
+            
             var noReplyNote = "\n\n(Please do not reply to this automated message.)";
 
             // 1. Notify Merchant
             if (order.Merchant != null)
             {
-                var merchantEmailMsg = $"The escrow payment for your order <b>{order.ItemName}</b> has been successfully funded.<br/><br/>This is your pickup QR code token: <b>{qrResult.Data.MerchantQrToken}</b>. Please show this to the dispatcher once they come to pick up the item.";
+                var merchantEmailMsg = $"The escrow payment for your order <b>{order.ItemName}</b> has been successfully funded.<br/><br/>" + 
+                                       $"This is your pickup QR code. Please show this to the dispatcher once they come to pick up the item:<br/><br/>" +
+                                       $"<img src='{merchantQrUrl}' alt='Merchant QR Code' style='max-width: 200px;'/><br/><br/>" +
+                                       $"Or manually copy this token: <b>{qrResult.Data.MerchantQrToken}</b>";
+                                       
                 await _emailService.SendEmailAsync(order.Merchant.Email, "Escrow Funded - Action Required", merchantEmailMsg, cancellationToken);
 
                 if (!string.IsNullOrEmpty(order.Merchant.Phone))
                 {
                     string merchantWaMsg = $"InstaSafe Alert ✅\n\n" +
                                            $"The escrow payment for your order #{order.OrderReference} has been successfully funded!\n\n" +
-                                           $"This is your pickup QR code token that you will show the dispatcher once they come to pick up:\n" +
+                                           $"This is your pickup QR code that you will show the dispatcher once they come to pick up:\n" +
                                            $"*{qrResult.Data.MerchantQrToken}*" +
                                            noReplyNote;
-                    await _whatsappService.SendMessageAsync(order.Merchant.Phone, merchantWaMsg, cancellationToken);
+                    await _whatsappService.SendImageAsync(order.Merchant.Phone, merchantQrUrl, merchantWaMsg, cancellationToken);
                 }
             }
 
             // 2. Notify Buyer
             if (order.Buyer != null)
             {
-                var buyerEmailMsg = $"Your payment was successful and the funds are now securely held in escrow.<br/><br/>This is your delivery QR code token: <b>{qrResult.Data.BuyerQrToken}</b>. Please show this to the dispatcher to confirm you have received the item.";
+                var buyerEmailMsg = $"Your payment was successful and the funds are now securely held in escrow.<br/><br/>" +
+                                    $"This is your delivery QR code. Please show this to the dispatcher to confirm you have received the item:<br/><br/>" +
+                                    $"<img src='{buyerQrUrl}' alt='Buyer QR Code' style='max-width: 200px;'/><br/><br/>" +
+                                    $"Or manually copy this token: <b>{qrResult.Data.BuyerQrToken}</b>";
+                                    
                 await _emailService.SendEmailAsync(order.Buyer.Email, "Payment Successful", buyerEmailMsg, cancellationToken);
 
                 if (!string.IsNullOrEmpty(order.Buyer.Phone))
                 {
                     string buyerWaMsg = $"InstaSafe Alert ✅\n\n" +
                                         $"Your payment for Order #{order.OrderReference} was successful!\n\n" +
-                                        $"This is your delivery QR code token that you will show the dispatcher to confirm receipt:\n" +
+                                        $"This is your delivery QR code that you will show the dispatcher to confirm receipt:\n" +
                                         $"*{qrResult.Data.BuyerQrToken}*" +
                                         noReplyNote;
-                    await _whatsappService.SendMessageAsync(order.Buyer.Phone, buyerWaMsg, cancellationToken);
+                    await _whatsappService.SendImageAsync(order.Buyer.Phone, buyerQrUrl, buyerWaMsg, cancellationToken);
                 }
             }
         }

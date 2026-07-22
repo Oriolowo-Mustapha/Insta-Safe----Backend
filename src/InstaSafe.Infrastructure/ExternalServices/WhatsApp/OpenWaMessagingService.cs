@@ -58,4 +58,51 @@ public class OpenWaMessagingService : IWhatsAppMessagingService
             _logger.LogError(ex, "Exception occurred while sending WhatsApp message via OpenWA.");
         }
     }
+
+    public async Task SendImageAsync(string toPhoneNumber, string imageUrl, string caption, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var chatId = toPhoneNumber.TrimStart('+') + "@c.us";
+
+            var requestBody = new
+            {
+                chatId,
+                file = new {
+                    mimetype = "image/png",
+                    url = imageUrl,
+                    filename = "qrcode.png"
+                },
+                caption
+            };
+
+            var url = $"{_options.BaseUrl.TrimEnd('/')}/sessions/{_options.SessionId}/messages/send-image";
+            var jsonContent = new StringContent(JsonSerializer.Serialize(requestBody), Encoding.UTF8, "application/json");
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Headers.Add("X-API-Key", _options.ApiKey);
+            request.Content = jsonContent;
+
+            var response = await _httpClient.SendAsync(request, cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                _logger.LogWarning("Failed to send WhatsApp image via OpenWA. Status: {StatusCode}, Error: {Error}", response.StatusCode, errorContent);
+                
+                // Fallback to just sending text with the URL
+                await SendMessageAsync(toPhoneNumber, $"{caption}\n\n{imageUrl}", cancellationToken);
+            }
+            else
+            {
+                _logger.LogInformation("WhatsApp image sent to {ChatId} via OpenWA.", chatId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Exception occurred while sending WhatsApp image via OpenWA.");
+            // Fallback to text
+            await SendMessageAsync(toPhoneNumber, $"{caption}\n\n{imageUrl}", cancellationToken);
+        }
+    }
 }
