@@ -24,8 +24,14 @@ public class OpenWaMessagingService : IWhatsAppMessagingService
     {
         try
         {
-            // OpenWA expects chatId in format: <number>@c.us
-            var chatId = toPhoneNumber.TrimStart('+') + "@c.us";
+            if (string.IsNullOrWhiteSpace(toPhoneNumber) || toPhoneNumber.Length < 7 || toPhoneNumber.TrimStart('+') == "0")
+            {
+                _logger.LogWarning("Skipping WhatsApp message due to obviously invalid phone number: {Phone}", toPhoneNumber);
+                return;
+            }
+
+            // Send just the plain phone number without the + or @c.us, WAHA handles the formatting
+            var chatId = toPhoneNumber.TrimStart('+');
 
             var requestBody = new
             {
@@ -63,7 +69,13 @@ public class OpenWaMessagingService : IWhatsAppMessagingService
     {
         try
         {
-            var chatId = toPhoneNumber.TrimStart('+') + "@c.us";
+            if (string.IsNullOrWhiteSpace(toPhoneNumber) || toPhoneNumber.Length < 7 || toPhoneNumber.TrimStart('+') == "0")
+            {
+                _logger.LogWarning("Skipping WhatsApp image due to obviously invalid phone number: {Phone}", toPhoneNumber);
+                return;
+            }
+
+            var chatId = toPhoneNumber.TrimStart('+');
 
             var requestBody = new
             {
