@@ -137,17 +137,43 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                             var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(aiResult.ExtractedData ?? "{}");
                             if (data != null && data.TryGetValue("Item", out var itemEl) && data.TryGetValue("Price", out var priceEl) && data.TryGetValue("Location", out var locationEl) && data.TryGetValue("BuyerPhone", out var buyerPhoneEl))
                             {
-                                var item = itemEl.GetString();
-                                var price = priceEl.GetDecimal();
-                                var location = locationEl.GetString();
-                                var buyerPhone = buyerPhoneEl.GetString();
+                                var item = itemEl.ValueKind == JsonValueKind.String ? itemEl.GetString() : itemEl.ToString();
+                                
+                                decimal price = 0;
+                                if (priceEl.ValueKind == JsonValueKind.Number) price = priceEl.GetDecimal();
+                                else decimal.TryParse(priceEl.GetString()?.Replace(",", "").Replace("N", ""), out price);
+                                
+                                var location = locationEl.ValueKind == JsonValueKind.String ? locationEl.GetString() : locationEl.ToString();
+                                var buyerPhone = buyerPhoneEl.ValueKind == JsonValueKind.String ? buyerPhoneEl.GetString() : buyerPhoneEl.ToString();
+                                
+                                var desc = data.TryGetValue("Description", out var dEl) ? (dEl.ValueKind == JsonValueKind.String ? dEl.GetString() : dEl.ToString()) : "Order via Chatbot";
+                                var buyerEmail = data.TryGetValue("BuyerEmail", out var eEl) ? (eEl.ValueKind == JsonValueKind.String ? eEl.GetString() : eEl.ToString()) : "unknown@example.com";
+                                var dispatcherPhone = data.TryGetValue("DispatcherPhone", out var dpEl) ? (dpEl.ValueKind == JsonValueKind.String ? dpEl.GetString() : dpEl.ToString()) : "";
 
-                                session.UpdateState(ChatbotState.ConfirmingOrder, aiResult.ExtractedData);
-                                replyMessage = $"Got it! {item}, N{price:N0}, delivery to {location}, Buyer Phone: {buyerPhone}. Confirm? (Yes/No)";
+                                if (string.IsNullOrWhiteSpace(buyerEmail) || !buyerEmail.Contains("@")) buyerEmail = "unknown@example.com";
+                                
+                                session.UpdateState(ChatbotState.ConfirmingOrder, JsonSerializer.Serialize(new {
+                                    Item = item,
+                                    Price = price,
+                                    Location = location,
+                                    BuyerPhone = buyerPhone,
+                                    Description = desc,
+                                    BuyerEmail = buyerEmail,
+                                    DispatcherPhone = dispatcherPhone
+                                }));
+
+                                replyMessage = $"Got it! Here is your order summary:\n" +
+                                               $"- Item: {item}\n" +
+                                               $"- Description: {desc}\n" +
+                                               $"- Price: N{price:N0}\n" +
+                                               $"- Delivery To: {location}\n" +
+                                               $"- Buyer: {buyerEmail} ({buyerPhone})\n" +
+                                               $"- Dispatcher: {(string.IsNullOrWhiteSpace(dispatcherPhone) ? "None yet" : dispatcherPhone)}\n\n" +
+                                               $"Confirm? (Yes/No)";
                             }
                             else
                             {
-                                replyMessage = "I couldn't extract all the details. Could you please specify the item, price, delivery location, and the buyer's phone number with country code (+234...)?";
+                                replyMessage = "I couldn't extract all the required details (Item, Price, Location, Buyer Phone). Could you please provide them?";
                             }
                         }
                         catch
@@ -177,43 +203,49 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
 
                 if (request.MessageText.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase))
                 {
-                    var finalData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(session.TemporaryData ?? "{}");
-                    var amountVal = finalData["Price"].GetDecimal();
-                    var itemVal = finalData["Item"].GetString() ?? "Order via Chatbot";
-                    var locationVal = finalData["Location"].GetString() ?? "Unknown Location";
-                    var buyerPhoneVal = finalData.ContainsKey("BuyerPhone") ? finalData["BuyerPhone"].GetString() ?? "" : "";
-                    
-                    var riskResult = await _fraudScoringEngine.EvaluateMerchantRiskAsync(merchant, cancellationToken);
-                    
-                    if (riskResult.RiskLevel == "High")
+                    try
                     {
-                        replyMessage = $"Transaction blocked due to high fraud risk. Reason: {string.Join(", ", riskResult.Factors)}";
-                        session.Reset();
-                        break;
-                    }
+                        var finalData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(session.TemporaryData ?? "{}");
+                        var amountVal = finalData.TryGetValue("Price", out var pEl) ? (pEl.ValueKind == JsonValueKind.Number ? pEl.GetDecimal() : decimal.Parse(pEl.GetString() ?? "0")) : 0;
+                        var itemVal = finalData.TryGetValue("Item", out var iEl) ? iEl.GetString() ?? "Order via Chatbot" : "Order via Chatbot";
+                        var locationVal = finalData.TryGetValue("Location", out var lEl) ? lEl.GetString() ?? "Unknown Location" : "Unknown Location";
+                        var buyerPhoneVal = finalData.TryGetValue("BuyerPhone", out var bpEl) ? bpEl.GetString() ?? "" : "";
+                        var descVal = finalData.TryGetValue("Description", out var dEl) ? dEl.GetString() ?? "" : "";
+                        var buyerEmailVal = finalData.TryGetValue("BuyerEmail", out var beEl) ? beEl.GetString() ?? "unknown@example.com" : "unknown@example.com";
+                        var dispatcherPhoneVal = finalData.TryGetValue("DispatcherPhone", out var dpEl) ? dpEl.GetString() ?? "" : "";
 
-                    var buyer = await _unitOfWork.Buyers.GetOrCreateAsync(
-                        "unknown@example.com", "Chatbot", "Buyer", buyerPhoneVal, cancellationToken);
+                        var riskResult = await _fraudScoringEngine.EvaluateMerchantRiskAsync(merchant, cancellationToken);
+                        
+                        if (riskResult.RiskLevel == "High")
+                        {
+                            replyMessage = $"Transaction blocked due to high fraud risk. Reason: {string.Join(", ", riskResult.Factors)}";
+                            session.Reset();
+                            break;
+                        }
 
-                    var today = _dateTimeProvider.UtcNow.ToString("yyyyMMdd");
-                    var prefix = $"INSTA-ORD-{today}";
-                    var count = await _unitOfWork.Orders.CountOrdersByReferencePrefixAsync(prefix, cancellationToken);
-                    var randomSuffix = Guid.NewGuid().ToString("N").Substring(0, 5).ToUpper();
-                    var orderReference = $"{prefix}-{(count + 1):D4}-{randomSuffix}";
+                        var buyer = await _unitOfWork.Buyers.GetOrCreateAsync(
+                            buyerEmailVal, "Chatbot", "Buyer", buyerPhoneVal, cancellationToken);
 
-                    var newOrder = new Order
-                    {
-                        Id = Guid.NewGuid(),
-                        OrderReference = orderReference,
-                        MerchantId = merchant!.Id,
-                        ItemName = itemVal,
-                        Price = amountVal,
-                        ItemDescription = $"Delivery to {locationVal}",
-                        RiskScore = riskResult.Score,
-                        RiskLevel = riskResult.RiskLevel
-                    };
-                    
-                    newOrder.SetBuyer(buyer.Id);
+                        var today = _dateTimeProvider.UtcNow.ToString("yyyyMMdd");
+                        var prefix = $"INSTA-ORD-{today}";
+                        var count = await _unitOfWork.Orders.CountOrdersByReferencePrefixAsync(prefix, cancellationToken);
+                        var randomSuffix = Guid.NewGuid().ToString("N").Substring(0, 5).ToUpper();
+                        var orderReference = $"{prefix}-{(count + 1):D4}-{randomSuffix}";
+
+                        var newOrder = new Order
+                        {
+                            Id = Guid.NewGuid(),
+                            OrderReference = orderReference,
+                            MerchantId = merchant!.Id,
+                            ItemName = itemVal,
+                            Price = amountVal,
+                            ItemDescription = string.IsNullOrWhiteSpace(descVal) ? $"Delivery to {locationVal}" : $"Delivery to {locationVal}. {descVal}",
+                            DispatcherPhone = string.IsNullOrWhiteSpace(dispatcherPhoneVal) ? null : dispatcherPhoneVal,
+                            RiskScore = riskResult.Score,
+                            RiskLevel = riskResult.RiskLevel
+                        };
+                        
+                        newOrder.SetBuyer(buyer.Id);
 
                     var frontendUrl = _configuration["FrontendUrl:Production"] ?? "https://instasafe.vercel.app";
                     var initRequest = new InitTransactionRequest(
@@ -261,6 +293,11 @@ public class ProcessChatbotMessageCommandHandler : IRequestHandler<ProcessChatbo
                     catch (Exception)
                     {
                         replyMessage = $"There was an error connecting to the payment provider. We could not create the order. Please try again later.";
+                    }
+                    }
+                    catch (Exception)
+                    {
+                        replyMessage = "Sorry, I had trouble parsing the order details from our session. Please type 'I want to create an order' to start again.";
                     }
 
                     session.Reset();
