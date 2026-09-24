@@ -1,0 +1,20 @@
+{
+  "event": "message.received",
+  "timestamp": "2026-09-22T10:00:00.000Z",
+  "sessionId": "8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a",
+  "idempotencyKey": "msg_8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a_true_2348012345678@c.us_3EB0ABC123_sample",
+  "deliveryId": "dlv_sample-0001",
+  "data": {
+    "id": "true_2348012345678@c.us_3EB0ABC123",
+    "from": "2348012345678@c.us",
+    "to": "2348098765432@c.us",
+    "chatId": "2348012345678@c.us",
+    "body": "Order: 2 pairs of sneakers for Chidi, 08012345678, Lekki, 45000",
+    "type": "text",
+    "timestamp": 1758530000,
+    "fromMe": false,
+    "isGroup": false,
+    "kind": "individual",
+    "author": "2348012345678@c.us"
+  }
+}

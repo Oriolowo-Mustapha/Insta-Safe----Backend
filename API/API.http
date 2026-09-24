@@ -1,0 +1,160 @@
+@InstaSafe_HostAddress = http://localhost:5080
+
+### Health
+GET {{InstaSafe_HostAddress}}/health
+Accept: application/json
+
+###
+
+### List orders
+GET {{InstaSafe_HostAddress}}/api/orders?page=1&pageSize=20
+Accept: application/json
+
+###
+
+### Create order
+POST {{InstaSafe_HostAddress}}/api/orders
+Content-Type: application/json
+
+{
+  "vendorPhone": "08012345678",
+  "customerName": "Chidi",
+  "customerPhone": "08087654321",
+  "deliveryAddress": "Lekki",
+  "items": [
+    { "description": "Sneakers", "quantity": 2, "unitPriceKobo": 2250000 }
+  ],
+  "amountKobo": 4500000,
+  "currency": "NGN"
+}
+
+###
+
+### Parse order text
+POST {{InstaSafe_HostAddress}}/api/orders/parse
+Content-Type: application/json
+
+{
+  "text": "Order: 2 pairs of sneakers for Chidi, 08012345678, Lekki, 45000"
+}
+
+###
+
+### Register vendor
+POST {{InstaSafe_HostAddress}}/api/vendors
+Content-Type: application/json
+
+{
+  "phone": "08012345678",
+  "displayName": "Ada Boutique",
+  "accountNumber": "0123456789",
+  "bankCode": "058"
+}
+
+###
+
+### Get vendor by phone
+GET {{InstaSafe_HostAddress}}/api/vendors/by-phone?phone=08012345678
+Accept: application/json
+
+###
+
+### List vendors
+GET {{InstaSafe_HostAddress}}/api/vendors?page=1&pageSize=20&activeOnly=true
+Accept: application/json
+
+###
+
+### Request vendor login code (public)
+POST {{InstaSafe_HostAddress}}/api/auth/vendor/request-code
+Content-Type: application/json
+
+{
+  "phone": "08012345678"
+}
+
+###
+
+### Verify login code -> JWT (public)
+POST {{InstaSafe_HostAddress}}/api/auth/vendor/verify-code
+Content-Type: application/json
+
+{
+  "phone": "08012345678",
+  "code": "123456"
+}
+
+###
+
+### Authed example: my vendor profile (Authorization: Bearer <token>)
+GET {{InstaSafe_HostAddress}}/api/vendors/by-phone?phone=08012345678
+Accept: application/json
+Authorization: Bearer YOUR_JWT_HERE
+
+###
+
+### Guest example: track order by reference (no auth)
+GET {{InstaSafe_HostAddress}}/api/orders/by-reference/ref-123
+Accept: application/json
+
+###
+
+### Register dispatcher (public)
+POST {{InstaSafe_HostAddress}}/api/dispatch/register
+Content-Type: application/json
+
+{
+  "phone": "08055556666",
+  "firstName": "Musa",
+  "lastName": "Rider",
+  "accountNumber": "0123456789",
+  "bankCode": "058"
+}
+
+###
+
+### Driver assigned deliveries (Authorization: Bearer <driver-jwt>)
+GET {{InstaSafe_HostAddress}}/api/dispatch/assigned
+Accept: application/json
+Authorization: Bearer YOUR_DRIVER_JWT_HERE
+
+###
+
+### Driver confirm delivery (driver JWT + buyer OTP)
+POST {{InstaSafe_HostAddress}}/api/dispatch/orders/00000000-0000-0000-0000-000000000000/confirm
+Content-Type: application/json
+Authorization: Bearer YOUR_DRIVER_JWT_HERE
+
+{
+  "otp": "123456"
+}
+
+###
+
+### Buyer confirm satisfaction, digital order (no auth)
+POST {{InstaSafe_HostAddress}}/api/orders/00000000-0000-0000-0000-000000000000/confirm-satisfaction
+Accept: application/json
+
+###
+
+### Buyer file dispute (no auth)
+POST {{InstaSafe_HostAddress}}/api/orders/00000000-0000-0000-0000-000000000000/dispute
+Content-Type: application/json
+
+{
+  "reason": "Wrong item delivered"
+}
+
+###
+
+### Vendor resolve dispute (vendor JWT): {"resolution":"release"} or {"resolution":"refund"}
+POST {{InstaSafe_HostAddress}}/api/orders/00000000-0000-0000-0000-000000000000/resolve-dispute
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_HERE
+
+{
+  "resolution": "release"
+}
+
+###
+

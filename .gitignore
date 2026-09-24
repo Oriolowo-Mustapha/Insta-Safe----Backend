@@ -1,0 +1,40 @@
+## Build outputs
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+
+## Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Secrets — never commit these
+.env
+*.pfx
+appsettings.*.json
+!appsettings.json
+!appsettings.Development.json
+
+## Test results / coverage
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage*/
+
+## OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+## Agent tooling
+.agoya/
+
+## dotnet tools / misc
+.dotnet/
