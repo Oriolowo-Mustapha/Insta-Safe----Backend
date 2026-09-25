@@ -7,31 +7,37 @@ namespace Application.UnitTests;
 
 public class VendorValidatorTests
 {
+    private static RegisterVendorCommand Full(string phone = "08012345678") =>
+        new(phone, "Ada Boutique", "Ada", "Obi", "ada@example.com", "s3cretPass!");
+
     [Theory]
-    [InlineData("", "Ada")]
-    [InlineData("08012345678", "")]
-    public void RegisterVendor_RejectsEmptyRequiredFields(string phone, string displayName)
+    [InlineData("", "Ada Boutique", "Ada", "Obi", "ada@example.com", "s3cretPass!")]
+    [InlineData("08012345678", "", "Ada", "Obi", "ada@example.com", "s3cretPass!")]
+    [InlineData("08012345678", "Ada Boutique", "", "Obi", "ada@example.com", "s3cretPass!")]
+    [InlineData("08012345678", "Ada Boutique", "Ada", "Obi", "not-an-email", "s3cretPass!")]
+    [InlineData("08012345678", "Ada Boutique", "Ada", "Obi", "ada@example.com", "short")]
+    public void RegisterVendor_RejectsBadSignup(
+        string phone, string displayName, string first, string last, string email, string password)
     {
         var validator = new RegisterVendorCommandValidator();
-        var result = validator.Validate(new RegisterVendorCommand(phone, displayName));
+        var result = validator.Validate(new RegisterVendorCommand(
+            phone, displayName, first, last, email, password));
         Assert.False(result.IsValid);
     }
 
     [Fact]
-    public void RegisterVendor_AcceptsValidMinimalVendor()
+    public void RegisterVendor_AcceptsValidSignup()
     {
         var validator = new RegisterVendorCommandValidator();
-        var result = validator.Validate(new RegisterVendorCommand("08012345678", "Ada Boutique"));
-        Assert.True(result.IsValid);
+        Assert.True(validator.Validate(Full()).IsValid);
     }
 
     [Fact]
     public void RegisterVendor_BankPairRequiresBothParts()
     {
         var validator = new RegisterVendorCommandValidator();
-        var result = validator.Validate(new RegisterVendorCommand(
-            "08012345678", "Ada", AccountNumber: "0123456789", BankCode: null));
-        Assert.False(result.IsValid);
+        var cmd = Full() with { AccountNumber = "0123456789", BankCode = null };
+        Assert.False(validator.Validate(cmd).IsValid);
     }
 
     [Fact]

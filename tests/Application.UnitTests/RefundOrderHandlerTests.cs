@@ -51,6 +51,8 @@ public class RefundOrderHandlerTests
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken ct) => Task.FromResult(false);
         public Task<Vendor?> GetByIdAsync(Guid id, CancellationToken ct) => Task.FromResult<Vendor?>(null);
         public Task<Vendor?> GetByPhoneAsync(string phone, CancellationToken ct) => Task.FromResult<Vendor?>(null);
+        public Task<Vendor?> GetByEmailAsync(string email, CancellationToken ct) => Task.FromResult<Vendor?>(null);
+        public Task<bool> ExistsByEmailAsync(string email, CancellationToken ct) => Task.FromResult(false);
         public Task<List<Vendor>> ListAsync(int page, int pageSize, bool? activeOnly, CancellationToken ct)
             => Task.FromResult(new List<Vendor>());
         public Task SaveAsync(CancellationToken ct) => Task.CompletedTask;

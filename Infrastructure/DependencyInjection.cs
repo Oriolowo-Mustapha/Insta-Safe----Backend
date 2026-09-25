@@ -8,6 +8,7 @@ using InstaSafe.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace InstaSafe.Infrastructure;
 
@@ -31,10 +32,16 @@ public static class DependencyInjection
         services.AddSingleton<IEmailSender, BrevoEmailSender>();
         services.AddSingleton<ISanitizer, HtmlSanitizerAdapter>();
         services.AddSingleton<IOtpService, OtpService>();
+        services.AddSingleton<IPasswordHasher, PasswordHasher>();
 
         services.AddHttpClient<IPaystackClient, PaystackClient>();
         services.AddHttpClient<IGroqParser, GroqParser>();
-        services.AddHttpClient<IWhatsAppSender, WhatsAppSender>();
+        services.AddHttpClient<WhatsAppSender>();
+        services.AddScoped<IWhatsAppSender>(sp =>
+            new LoggingWhatsAppSender(
+                sp.GetRequiredService<WhatsAppSender>(),
+                sp.GetRequiredService<IAppDbContext>(),
+                sp.GetRequiredService<ILogger<LoggingWhatsAppSender>>()));
 
         services.AddHostedService<OutboxPublisher>();
         services.AddHostedService<ReleaseDueOrdersWorker>();

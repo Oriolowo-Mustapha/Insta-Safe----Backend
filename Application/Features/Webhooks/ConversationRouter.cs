@@ -3,6 +3,7 @@ using InstaSafe.Application.Common.Helpers;
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Features.Orders.Commands.CreateOrder;
 using MediatR;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace InstaSafe.Application.Features.Webhooks;
@@ -18,16 +19,17 @@ public class ConversationRouter
     private readonly IWhatsAppSender _sender;
     private readonly IMediator _mediator;
     private readonly ISanitizer _sanitizer;
+    private readonly IConfiguration _config;
     private readonly ILogger<ConversationRouter> _logger;
 
     public ConversationRouter(
         IConversationRepository states, IVendorRepository vendors, IOrderRepository orders,
         IGroqParser parser, IWhatsAppSender sender, IMediator mediator,
-        ISanitizer sanitizer, ILogger<ConversationRouter> logger)
+        ISanitizer sanitizer, IConfiguration config, ILogger<ConversationRouter> logger)
     {
         _states = states; _vendors = vendors; _orders = orders;
         _parser = parser; _sender = sender; _mediator = mediator;
-        _sanitizer = sanitizer; _logger = logger;
+        _sanitizer = sanitizer; _config = config; _logger = logger;
     }
 
     public async Task<bool> RouteAsync(string rawPhone, string body, string? replyJid, CancellationToken ct)
@@ -36,6 +38,15 @@ public class ConversationRouter
         var replyTo = string.IsNullOrWhiteSpace(replyJid) ? phone : replyJid.Trim();
         var text = (body ?? "").Trim();
         if (string.IsNullOrEmpty(text)) return false;
+
+        // Bot access gate: signed-up + email-verified + onboarded vendors only.
+        // No state is created for strangers; one short nudge and stop.
+        var gate = await CheckAccessAsync(phone, ct);
+        if (gate is not null)
+        {
+            await SendWithTimeoutAsync(replyTo, gate);
+            return true;
+        }
 
         var state = await _states.GetByPhoneAsync(phone, ct);
         if (state is null)
@@ -53,9 +64,6 @@ public class ConversationRouter
                 Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
             return true;
         }
-
-        await EnsureVendorAsync(phone, ct);
-
         var upper = text.ToUpperInvariant();
         if (upper is "MENU" or "0")
         {
@@ -396,16 +404,26 @@ public class ConversationRouter
             ConversationTexts.TrackResult(displayRef, order.Status.ToString(), order.AmountKobo));
     }
 
-    private async Task EnsureVendorAsync(string phone, CancellationToken ct)
+    /// <summary>
+    /// Bot access gate. Returns null when the sender may use the bot,
+    /// otherwise the one-shot nudge to send instead (no state created).
+    /// </summary>
+    private async Task<string?> CheckAccessAsync(string phone, CancellationToken ct)
     {
         var vendor = await _vendors.GetByPhoneAsync(phone, ct);
-        if (vendor is null)
-            await _vendors.AddAsync(new Domain.Entities.Vendor
-            {
-                Phone = phone,
-                DisplayName = phone,
-                IsActive = true
-            }, ct);
+        if (vendor is null || !vendor.EmailVerified)
+        {
+            var baseUrl = (_config["Frontend:BaseUrl"] ?? "").TrimEnd('/');
+            return ConversationTexts.SignupRequired(baseUrl);
+        }
+        if (!vendor.IsActive)
+            return ConversationTexts.AccountDeactivated;
+        if (!vendor.OnboardingCompleted)
+        {
+            var baseUrl = (_config["Frontend:BaseUrl"] ?? "").TrimEnd('/');
+            return ConversationTexts.OnboardingRequired(baseUrl);
+        }
+        return null;
     }
 
     private static void Reset(Domain.Entities.ConversationState state)

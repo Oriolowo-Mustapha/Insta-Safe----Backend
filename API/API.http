@@ -40,15 +40,49 @@ Content-Type: application/json
 
 ###
 
-### Register vendor
+### Register vendor (step 1: profile + password -> email OTP sent)
 POST {{InstaSafe_HostAddress}}/api/vendors
 Content-Type: application/json
 
 {
   "phone": "08012345678",
   "displayName": "Ada Boutique",
-  "accountNumber": "0123456789",
-  "bankCode": "058"
+  "firstName": "Ada",
+  "lastName": "Obi",
+  "email": "ada@example.com",
+  "password": "s3cretPass!"
+}
+
+###
+
+### Verify email (step 1b)
+POST {{InstaSafe_HostAddress}}/api/auth/vendor/verify-email
+Content-Type: application/json
+
+{
+  "email": "ada@example.com",
+  "code": "123456"
+}
+
+###
+
+### Resend email code
+POST {{InstaSafe_HostAddress}}/api/auth/vendor/request-email-code
+Content-Type: application/json
+
+{
+  "email": "ada@example.com"
+}
+
+###
+
+### Vendor login (phone OR email + password)
+POST {{InstaSafe_HostAddress}}/api/auth/vendor/login
+Content-Type: application/json
+
+{
+  "loginId": "ada@example.com",
+  "password": "s3cretPass!"
 }
 
 ###

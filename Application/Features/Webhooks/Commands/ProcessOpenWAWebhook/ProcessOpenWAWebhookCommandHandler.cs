@@ -106,6 +106,15 @@ public class ProcessOpenWAWebhookCommandHandler : IRequestHandler<ProcessOpenWAW
 
         var vendorPhone = from.Contains('@') ? from[..from.IndexOf('@')] : from;
 
+        // Admin audit trail: persisted immediately so it survives downstream failures.
+        _db.ChatMessages.Add(new ChatMessage
+        {
+            Phone = vendorPhone,
+            Direction = ChatDirection.Inbound,
+            Body = body.Length > 1000 ? body[..1000] : body
+        });
+        await _db.SaveChangesAsync(ct);
+
         return await _router.RouteAsync(vendorPhone, body, from, ct);
     }
 

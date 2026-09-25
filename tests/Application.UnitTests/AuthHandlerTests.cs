@@ -18,6 +18,12 @@ public class AuthHandlerTests
             => Task.FromResult(Vendors.FirstOrDefault(v => v.Id == id));
         public Task<Vendor?> GetByPhoneAsync(string phone, CancellationToken ct)
             => Task.FromResult(Vendors.FirstOrDefault(v => v.Phone == phone));
+        public Task<Vendor?> GetByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Vendors.FirstOrDefault(v =>
+                v.Email != null && v.Email.Equals(email, StringComparison.OrdinalIgnoreCase)));
+        public Task<bool> ExistsByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Vendors.Any(v =>
+                v.Email != null && v.Email.Equals(email, StringComparison.OrdinalIgnoreCase)));
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken ct)
             => Task.FromResult(Vendors.Any(v => v.Phone == phone));
         public Task AddAsync(Vendor vendor, CancellationToken ct)

@@ -8,10 +8,10 @@ public class RegisterVendorCommandValidator : AbstractValidator<RegisterVendorCo
     {
         RuleFor(x => x.Phone).NotEmpty().MaximumLength(20);
         RuleFor(x => x.DisplayName).NotEmpty().MaximumLength(120);
-        RuleFor(x => x.FirstName).MaximumLength(120);
-        RuleFor(x => x.LastName).MaximumLength(120);
-        RuleFor(x => x.Email).MaximumLength(200).EmailAddress()
-            .When(x => !string.IsNullOrWhiteSpace(x.Email));
+        RuleFor(x => x.FirstName).NotEmpty().MaximumLength(120);
+        RuleFor(x => x.LastName).NotEmpty().MaximumLength(120);
+        RuleFor(x => x.Email).NotEmpty().MaximumLength(200).EmailAddress();
+        RuleFor(x => x.Password).NotEmpty().MinimumLength(8).MaximumLength(100);
         RuleFor(x => x.AccountNumber).MaximumLength(20);
         RuleFor(x => x.BankCode).MaximumLength(10);
         When(x => x.AccountNumber is not null || x.BankCode is not null, () =>

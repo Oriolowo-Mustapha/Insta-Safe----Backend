@@ -32,6 +32,12 @@ public class ConversationRouterTests
             => Task.FromResult(Vendors.FirstOrDefault(v => v.Id == id));
         public Task<Vendor?> GetByPhoneAsync(string phone, CancellationToken ct)
             => Task.FromResult(Vendors.FirstOrDefault(v => v.Phone == phone));
+        public Task<Vendor?> GetByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Vendors.FirstOrDefault(v =>
+                v.Email != null && v.Email.Equals(email, StringComparison.OrdinalIgnoreCase)));
+        public Task<bool> ExistsByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Vendors.Any(v =>
+                v.Email != null && v.Email.Equals(email, StringComparison.OrdinalIgnoreCase)));
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken ct)
             => Task.FromResult(Vendors.Any(v => v.Phone == phone));
         public Task AddAsync(Vendor vendor, CancellationToken ct)
@@ -118,6 +124,14 @@ public class ConversationRouterTests
             => string.IsNullOrEmpty(input) ? string.Empty : input.Length > maxLength ? input[..maxLength] : input;
     }
 
+    private sealed class FakeConfig : Microsoft.Extensions.Configuration.IConfiguration
+    {
+        public string? this[string key] { get => "https://app.test"; set { } }
+        public IEnumerable<Microsoft.Extensions.Configuration.IConfigurationSection> GetChildren() => [];
+        public Microsoft.Extensions.Primitives.IChangeToken GetReloadToken() => throw new NotImplementedException();
+        public Microsoft.Extensions.Configuration.IConfigurationSection GetSection(string key) => throw new NotImplementedException();
+    }
+
     private readonly FakeStates _states = new();
     private readonly FakeVendors _vendors = new();
     private readonly FakeOrders _orders = new();
@@ -130,11 +144,24 @@ public class ConversationRouterTests
     {
         _router = new ConversationRouter(
             _states, _vendors, _orders, _parser, _sender, _mediator,
-            new PassThroughSanitizer(), NullLogger<ConversationRouter>.Instance);
+            new PassThroughSanitizer(), new FakeConfig(), NullLogger<ConversationRouter>.Instance);
     }
 
+    private void SeedVendor(string phone) => _vendors.Vendors.Add(new Vendor
+    {
+        Phone = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone),
+        DisplayName = "Test Vendor",
+        EmailVerified = true,
+        OnboardingCompleted = true
+    });
+
     private Task<bool> Send(string phone, string text)
-        => _router.RouteAsync(phone, text, null, CancellationToken.None);
+    {
+        if (!_vendors.Vendors.Any(v => v.Phone ==
+            InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone)))
+            SeedVendor(phone);
+        return _router.RouteAsync(phone, text, null, CancellationToken.None);
+    }
 
     private ConversationState State(string phone) => _states.Store[phone];
 
@@ -269,11 +296,73 @@ public class ConversationRouterTests
     [Fact]
     public async Task Reply_UsesSenderJid_NotReconstructedCus()
     {
-        _parser.NextIntent = new ChatIntent(ChatIntentKind.Greeting, null, null);
-
+        SeedVendor("08010000010");
         await _router.RouteAsync("08010000010", "Hi", "91745383633143@lid", CancellationToken.None);
 
         Assert.Equal("91745383633143@lid", _sender.Sent[^1].To);
+    }
+
+    [Fact]
+    public async Task Gate_UnknownPhone_GetsSignupNudge_AndNoState()
+    {
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Greeting, null, null);
+
+        var handled = await _router.RouteAsync("08019990001", "Hi", null, CancellationToken.None);
+
+        Assert.True(handled);
+        Assert.Contains("not signed up", _sender.LastBody);
+        Assert.Contains("https://app.test/signup", _sender.LastBody);
+        Assert.False(_states.Store.ContainsKey("08019990001"));
+    }
+
+    [Fact]
+    public async Task Gate_UnverifiedVendor_GetsSignupNudge()
+    {
+        _vendors.Vendors.Add(new Vendor
+        {
+            Phone = "08019990002",
+            DisplayName = "Unverified",
+            EmailVerified = false,
+            OnboardingCompleted = false
+        });
+
+        await _router.RouteAsync("08019990002", "Hi", null, CancellationToken.None);
+
+        Assert.Contains("not signed up", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Gate_DeactivatedVendor_Blocked()
+    {
+        _vendors.Vendors.Add(new Vendor
+        {
+            Phone = "08019990003",
+            DisplayName = "Gone",
+            EmailVerified = true,
+            OnboardingCompleted = true,
+            IsActive = false
+        });
+
+        await _router.RouteAsync("08019990003", "Hi", null, CancellationToken.None);
+
+        Assert.Contains("deactivated", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Gate_UnonboardedVendor_GetsOnboardingNudge()
+    {
+        _vendors.Vendors.Add(new Vendor
+        {
+            Phone = "08019990004",
+            DisplayName = "NoBank",
+            EmailVerified = true,
+            OnboardingCompleted = false
+        });
+
+        await _router.RouteAsync("08019990004", "1", null, CancellationToken.None);
+
+        Assert.Contains("payout", _sender.LastBody);
+        Assert.Contains("https://app.test/onboarding", _sender.LastBody);
     }
 
     [Fact]

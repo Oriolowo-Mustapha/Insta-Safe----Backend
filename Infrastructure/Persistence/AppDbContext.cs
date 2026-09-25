@@ -25,6 +25,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<Dispatcher> Dispatchers => Set<Dispatcher>();
     public DbSet<ConversationState> ConversationStates => Set<ConversationState>();
+    public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<EscrowLedger> Ledgers => Set<EscrowLedger>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
@@ -43,7 +44,10 @@ public class AppDbContext : DbContext, IAppDbContext
             e.Property(x => x.BankCode).HasMaxLength(10);
             e.Property(x => x.PaystackRecipientCode).HasMaxLength(100);
             e.Property(x => x.OtpHash).HasMaxLength(200);
+            e.Property(x => x.PasswordHash).HasMaxLength(500);
+            e.Property(x => x.EmailOtpHash).HasMaxLength(200);
             e.HasIndex(x => x.Phone).IsUnique();
+            e.HasIndex(x => x.Email).IsUnique();
         });
 
         b.Entity<ConversationState>(e =>
@@ -52,6 +56,15 @@ public class AppDbContext : DbContext, IAppDbContext
             e.Property(x => x.Phone).HasMaxLength(20).IsRequired();
             e.Property(x => x.DraftJson).HasMaxLength(2000);
             e.HasIndex(x => x.Phone).IsUnique();
+        });
+
+        b.Entity<ChatMessage>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Phone).HasMaxLength(20).IsRequired();
+            e.Property(x => x.Body).HasMaxLength(1000).IsRequired();
+            e.HasIndex(x => x.Phone);
+            e.HasIndex(x => x.CreatedAt);
         });
 
         b.Entity<Dispatcher>(e =>

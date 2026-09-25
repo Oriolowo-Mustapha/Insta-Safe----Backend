@@ -9,6 +9,7 @@ public interface IAppDbContext
     DbSet<Vendor> Vendors { get; }
     DbSet<Dispatcher> Dispatchers { get; }
     DbSet<ConversationState> ConversationStates { get; }
+    DbSet<ChatMessage> ChatMessages { get; }
     DbSet<EscrowLedger> Ledgers { get; }
     DbSet<OutboxMessage> OutboxMessages { get; }
     DbSet<WebhookEvent> WebhookEvents { get; }

@@ -32,6 +32,7 @@ public class UpdateVendorPayoutCommandHandler : IRequestHandler<UpdateVendorPayo
             vendor.AccountNumber, vendor.BankCode, vendor.DisplayName, ct);
         if (recipient is not null) vendor.PaystackRecipientCode = recipient;
 
+        vendor.OnboardingCompleted = true;
         vendor.Touch();
         await _vendors.SaveAsync(ct);
 
