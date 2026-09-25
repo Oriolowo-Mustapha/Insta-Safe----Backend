@@ -57,6 +57,12 @@ public class RegisterVendorHandlerTests
             => Task.FromResult<string?>(null);
         public Task<(bool Success, string? RefundReference, string? Error)> RefundTransactionAsync(string reference, CancellationToken ct)
             => Task.FromResult((true, (string?)"RFND_TEST", (string?)null));
+        public Task<(bool Success, string? CustomerCode, string? Error)> CreateCustomerAsync(string email, string firstName, string lastName, string phone, Guid orderId, CancellationToken ct)
+            => Task.FromResult((true, (string?)"CUS_TEST", (string?)null));
+        public Task<(bool Success, string? AccountNumber, string? AccountName, string? Bank, string? Error)> AssignDedicatedAccountAsync(string customerCode, string? preferredBank, CancellationToken ct)
+            => Task.FromResult((true, (string?)"0123456789", (string?)"Ada Obi", (string?)"Wema", (string?)null));
+        public Task<List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
+            => Task.FromResult(new List<(string Name, string Slug, string Code)>());
     }
 
     private sealed class PassThroughSanitizer : ISanitizer
@@ -64,7 +70,6 @@ public class RegisterVendorHandlerTests
         public string Clean(string? input, int maxLength = 2000)
             => input is null ? string.Empty : input.Length > maxLength ? input[..maxLength] : input;
     }
-
     private sealed class FakePasswords : IPasswordHasher
     {
         public string Hash(string password) => $"HASHED:{password}";

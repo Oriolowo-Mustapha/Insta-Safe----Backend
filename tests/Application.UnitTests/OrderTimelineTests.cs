@@ -26,6 +26,8 @@ public class OrderTimelineTests
             => Task.FromResult(new List<Order>());
         public Task<List<Order>> ListByDriverAsync(Guid driverId, string driverPhone, int page, int pageSize, CancellationToken ct)
             => Task.FromResult(new List<Order>());
+        public Task<List<Order>> ListUnpaidByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Orders.Where(o => o.BuyerEmail == email).ToList());
     }
 
     private static Order HeldOrder() => new()

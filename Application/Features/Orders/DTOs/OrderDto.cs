@@ -15,4 +15,6 @@ public sealed record OrderDto(
     string? DriverTransferReference = null,
     DateTimeOffset? DeliveredAt = null,
     DateTimeOffset? ReleaseDueAt = null,
-    string? DisputeReason = null);
+    string? DisputeReason = null,
+    string? PayVirtualAccountNumber = null,
+    string? PayVirtualAccountBank = null);

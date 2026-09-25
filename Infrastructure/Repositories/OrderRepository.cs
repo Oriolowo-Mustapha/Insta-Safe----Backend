@@ -19,6 +19,13 @@ public class OrderRepository : IOrderRepository
     public Task<Order?> GetByPaystackRefAsync(string reference, CancellationToken ct)
         => _db.Orders.FirstOrDefaultAsync(o => o.PaystackReference == reference, ct)!;
 
+    public Task<List<Order>> ListUnpaidByEmailAsync(string email, CancellationToken ct)
+        => _db.Orders.AsNoTracking()
+            .Where(o => (o.Status == Domain.Enums.OrderStatus.AwaitingPayment || o.Status == Domain.Enums.OrderStatus.Draft)
+                && o.BuyerEmail != null && o.BuyerEmail.ToLower() == email.ToLower())
+            .OrderBy(o => o.CreatedAt)
+            .ToListAsync(ct);
+
     public Task<List<Order>> ListAsync(int page, int pageSize, CancellationToken ct)
         => _db.Orders.AsNoTracking().OrderByDescending(o => o.CreatedAt)
             .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);

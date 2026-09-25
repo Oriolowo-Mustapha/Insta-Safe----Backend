@@ -5,6 +5,7 @@ using InstaSafe.Application.Features.Orders.Commands.ParseOrderText;
 using InstaSafe.Application.Features.Orders.Commands.ConfirmSatisfaction;
 using InstaSafe.Application.Features.Orders.Commands.DisputeOrder;
 using InstaSafe.Application.Features.Orders.Commands.RefundOrder;
+using InstaSafe.Application.Features.Orders.Commands.RequestBankTransfer;
 using InstaSafe.Application.Features.Orders.Commands.ResolveDispute;
 using InstaSafe.Application.Features.Orders.Commands.VerifyOtp;
 using InstaSafe.Application.Features.Orders.DTOs;
@@ -104,8 +105,23 @@ public class OrdersController : ControllerBase
         return Ok(ApiResponse<OrderDto>.FromResult(result, "Funds released to vendor."));
     }
 
-    [HttpPost("{id:guid}/refund")]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> Refund(Guid id, CancellationToken ct)
+    /// <summary>
+    /// Issue a dedicated bank-transfer account for this order.
+    /// Buyer transfers the exact total; funds auto-confirm into escrow.
+    /// </summary>
+    [HttpPost("{id:guid}/request-bank-transfer")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> RequestBankTransfer(
+        Guid id, [FromBody] BankTransferRequest body, CancellationToken ct)
+    {
+        var existing = await _mediator.Send(new GetOrderByIdQuery(id), ct);
+        if (!existing.IsSuccess) return NotFound(ApiResponse<OrderDto>.FromResult(existing));
+        if (!Owns(existing.Value!)) return Forbid();
+        var result = await _mediator.Send(new RequestBankTransferCommand(id, body?.PreferredBank), ct);
+        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
+        return Ok(ApiResponse<OrderDto>.FromResult(result, "Transfer account issued. Buyer notified."));
+    }
+
+    [HttpPost("{id:guid}/refund")]    public async Task<ActionResult<ApiResponse<OrderDto>>> Refund(Guid id, CancellationToken ct)
     {
         var existing = await _mediator.Send(new GetOrderByIdQuery(id), ct);
         if (!existing.IsSuccess) return NotFound(ApiResponse<OrderDto>.FromResult(existing));
@@ -151,4 +167,5 @@ public class OrdersController : ControllerBase
     public sealed record VerifyOtpRequest(string Otp);
     public sealed record DisputeRequest(string Reason);
     public sealed record ResolveDisputeRequest(string Resolution);
+    public sealed record BankTransferRequest(string? PreferredBank);
 }

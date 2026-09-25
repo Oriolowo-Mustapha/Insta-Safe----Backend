@@ -139,6 +139,24 @@ Accept: application/json
 
 ###
 
+### Issue bank-transfer account for order (vendor JWT)
+POST {{InstaSafe_HostAddress}}/api/orders/00000000-0000-0000-0000-000000000000/request-bank-transfer
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_HERE
+
+{
+  "preferredBank": "wema-bank"
+}
+
+###
+
+### Transfer-capable banks (vendor JWT)
+GET {{InstaSafe_HostAddress}}/api/payments/banks
+Accept: application/json
+Authorization: Bearer YOUR_JWT_HERE
+
+###
+
 ### Driver login: request code with phone only (no account needed)
 POST {{InstaSafe_HostAddress}}/api/dispatch/request-code
 Content-Type: application/json

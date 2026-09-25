@@ -30,6 +30,8 @@ public class DeliveryFlowTests : IDisposable
             => _db.Orders.Where(o => o.VendorId == vendorId || o.VendorPhone == vendorPhone).ToListAsync(ct);
         public Task<List<Order>> ListByDriverAsync(Guid driverId, string driverPhone, int page, int pageSize, CancellationToken ct)
             => _db.Orders.Where(o => o.DriverId == driverId || o.DriverPhone == driverPhone).ToListAsync(ct);
+        public Task<List<Order>> ListUnpaidByEmailAsync(string email, CancellationToken ct)
+            => _db.Orders.Where(o => o.BuyerEmail == email).ToListAsync(ct);
         public Task SaveAsync(CancellationToken ct) => _db.SaveChangesAsync(ct);
     }
 
@@ -57,6 +59,12 @@ public class DeliveryFlowTests : IDisposable
         }
         public Task<(bool Success, string? RefundReference, string? Error)> RefundTransactionAsync(string reference, CancellationToken ct)
             => Task.FromResult(RefundSucceeds ? (true, (string?)"RFND_T", (string?)null) : (false, (string?)null, "nope"));
+        public Task<(bool Success, string? CustomerCode, string? Error)> CreateCustomerAsync(string email, string firstName, string lastName, string phone, Guid orderId, CancellationToken ct)
+            => Task.FromResult((true, (string?)"CUS_TEST", (string?)null));
+        public Task<(bool Success, string? AccountNumber, string? AccountName, string? Bank, string? Error)> AssignDedicatedAccountAsync(string customerCode, string? preferredBank, CancellationToken ct)
+            => Task.FromResult((true, (string?)"0123456789", (string?)"Ada Obi", (string?)"Wema", (string?)null));
+        public Task<List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
+            => Task.FromResult(new List<(string Name, string Slug, string Code)>());
     }
 
     private sealed class FakeSender : IWhatsAppSender
@@ -70,7 +78,6 @@ public class DeliveryFlowTests : IDisposable
         public Task SendTemplateAsync(string toPhone, string templateName, Dictionary<string, string> vars, CancellationToken ct)
             => Task.CompletedTask;
     }
-
     private sealed class FakeEmail : IEmailSender
     {
         public bool IsConfigured => true;

@@ -35,6 +35,10 @@ public class Order : BaseEntity
     public DateTimeOffset? ReleasedAt { get; set; }
     public string? TransferReference { get; set; }
     public string? RefundReference { get; set; }
+    public string? PaystackCustomerCode { get; set; }
+    public string? PayVirtualAccountNumber { get; set; }
+    public string? PayVirtualAccountBank { get; set; }
+    public string? PayVirtualAccountName { get; set; }
 
     public FulfillmentType Fulfillment { get; set; } = FulfillmentType.Dispatch;
     public long DeliveryFeeKobo { get; set; }

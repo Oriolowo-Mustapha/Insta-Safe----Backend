@@ -86,6 +86,20 @@ public class OrderNotifier
             $"InstaSafe delivery assigned 🚚\nOrder {order.Id}\nDeliver to: {order.DeliveryAddress}\nFee: {Money(order.DeliveryFeeKobo)}\nLog in to the driver portal to confirm on arrival. Check your dashboard for full details.");
     }
 
+    public async Task BankTransferDetailsAsync(Order order)
+    {
+        if (string.IsNullOrWhiteSpace(order.PayVirtualAccountNumber)) return;
+        var amount = Money(order.AmountKobo);
+        await TryWaAsync(order.CustomerPhone,
+            $"InstaSafe: pay {amount} by bank transfer to complete order {order.Id}:\n" +
+            $"Bank: {order.PayVirtualAccountBank}\nAccount: {order.PayVirtualAccountNumber}\n" +
+            $"Name: {order.PayVirtualAccountName}\nTransfer EXACTLY {amount} — your payment is confirmed automatically.");
+        await TryEmailAsync(order.BuyerEmail, $"Bank transfer details for your order ({amount})",
+            $"<p>Hi {order.CustomerName},</p><p>Pay <b>{amount}</b> by bank transfer:</p>" +
+            $"<p>Bank: <b>{order.PayVirtualAccountBank}</b><br/>Account: <b>{order.PayVirtualAccountNumber}</b><br/>Name: {order.PayVirtualAccountName}</p>" +
+            $"<p>Transfer exactly {amount} — your payment is confirmed automatically and held in escrow.</p>");
+    }
+
     public async Task DeliveredAsync(Order order, string? buyerEmail)
     {
         var window = "You have 24 hours to inspect. If anything is wrong, tap Dispute on your order page — otherwise funds release automatically.";

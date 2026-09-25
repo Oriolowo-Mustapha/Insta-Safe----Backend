@@ -29,6 +29,7 @@ public class MarkFundsHeldCommandHandler : IRequestHandler<MarkFundsHeldCommand,
     public async Task<Result<OrderDto>> Handle(MarkFundsHeldCommand req, CancellationToken ct)
     {
         var order = await _orders.GetByPaystackRefAsync(req.PaystackReference, ct);
+        order ??= await MatchDedicatedPaymentAsync(req, ct);
         if (order is null)
             return Result<OrderDto>.Failure($"Order with reference '{req.PaystackReference}' not found.");
 
@@ -37,6 +38,11 @@ public class MarkFundsHeldCommandHandler : IRequestHandler<MarkFundsHeldCommand,
 
         if (!await _paystack.VerifyTransactionAsync(req.PaystackReference, ct))
             return Result<OrderDto>.Failure("Paystack verification failed.");
+
+        // Dedicated-virtual-account payments carry a Paystack-side reference:
+        // adopt it so refunds trace back to the actual transaction.
+        if (order.PaystackReference != req.PaystackReference)
+            order.PaystackReference = req.PaystackReference;
 
         var code = _otp.GenerateOtp();
         var salt = _otp.NewSalt();
@@ -70,5 +76,20 @@ public class MarkFundsHeldCommandHandler : IRequestHandler<MarkFundsHeldCommand,
         catch { /* outbox covers retry; MVP keeps webhook fast */ }
 
         return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
+    }
+
+    /// <summary>
+    /// Bank-transfer matching: the DVA transaction reference is unknown to us,
+    /// so match the buyer's email to a single unpaid order with the exact amount.
+    /// Zero or ambiguous matches are left for manual reconcile (never mis-post).
+    /// </summary>
+    private async Task<Domain.Entities.Order?> MatchDedicatedPaymentAsync(
+        MarkFundsHeldCommand req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.CustomerEmail) || req.AmountKobo is null or <= 0)
+            return null;
+        var candidates = await _orders.ListUnpaidByEmailAsync(req.CustomerEmail.Trim(), ct);
+        var exact = candidates.Where(o => o.AmountKobo == req.AmountKobo.Value).ToList();
+        return exact.Count == 1 ? exact[0] : null;
     }
 }

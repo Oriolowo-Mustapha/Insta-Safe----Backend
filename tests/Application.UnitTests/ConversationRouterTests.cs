@@ -69,6 +69,8 @@ public class ConversationRouterTests
             => Task.FromResult(Orders.Where(o => o.VendorId == vendorId || o.VendorPhone == vendorPhone).ToList());
         public Task<List<Order>> ListByDriverAsync(Guid driverId, string driverPhone, int page, int pageSize, CancellationToken ct)
             => Task.FromResult(Orders.Where(o => o.DriverId == driverId || o.DriverPhone == driverPhone).ToList());
+        public Task<List<Order>> ListUnpaidByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Orders.Where(o => o.BuyerEmail == email).ToList());
     }
 
     private sealed class FakeParser : IGroqParser

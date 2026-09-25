@@ -99,6 +99,10 @@ public class AppDbContext : DbContext, IAppDbContext
             e.Property(x => x.PaystackAuthUrl).HasMaxLength(1000);
             e.Property(x => x.VendorRecipientCode).HasMaxLength(100);
             e.Property(x => x.RefundReference).HasMaxLength(100);
+            e.Property(x => x.PaystackCustomerCode).HasMaxLength(100);
+            e.Property(x => x.PayVirtualAccountNumber).HasMaxLength(20);
+            e.Property(x => x.PayVirtualAccountBank).HasMaxLength(120);
+            e.Property(x => x.PayVirtualAccountName).HasMaxLength(200);
             e.OwnsMany(x => x.Items, ib =>
             {
                 ib.ToJson();
