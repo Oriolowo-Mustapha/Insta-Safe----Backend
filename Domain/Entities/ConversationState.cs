@@ -10,7 +10,11 @@ public enum ConversationStep
     DraftItems = 5,
     DraftAmount = 6,
     Confirming = 7,
-    AwaitingTrackRef = 8
+    AwaitingTrackRef = 8,
+    DraftDeliveryFee = 9,
+    DraftDriverPhone = 10,
+    DraftDriverAccount = 11,
+    DraftDriverBank = 12
 }
 
 public class ConversationState : Common.BaseEntity

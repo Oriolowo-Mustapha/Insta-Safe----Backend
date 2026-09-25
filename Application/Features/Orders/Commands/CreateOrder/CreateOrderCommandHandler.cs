@@ -100,36 +100,19 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
 
         if (order.Fulfillment == FulfillmentType.Dispatch && !string.IsNullOrWhiteSpace(req.DriverPhone))
         {
+            // Driver payout details live per-order only (drivers hold no accounts).
             var driverPhone = PhoneNormalizer.Normalize(req.DriverPhone);
             var driver = await _drivers.GetByPhoneAsync(driverPhone, ct);
-            if (driver is null)
-            {
-                driver = new Dispatcher { Phone = driverPhone, IsActive = true };
-                await _drivers.AddAsync(driver, ct);
-            }
-            order.DriverId = driver.Id;
-            order.DriverPhone = driver.Phone;
+            if (driver is not null)
+                order.DriverId = driver.Id;
+            order.DriverPhone = driverPhone;
 
-            var driverAccount = req.DriverAccountNumber ?? driver.AccountNumber;
-            var driverBank = req.DriverBankCode ?? driver.BankCode;
-            if (driverAccount is not null && driverBank is not null)
+            if (req.DriverAccountNumber is not null && req.DriverBankCode is not null)
             {
-                var recipient = await _paystack.CreateRecipientAsync(driverAccount, driverBank, driver.Phone, ct);
+                var recipient = await _paystack.CreateRecipientAsync(
+                    req.DriverAccountNumber, req.DriverBankCode, driverPhone, ct);
                 if (recipient is not null)
-                {
                     order.DriverRecipientCode = recipient;
-                    if (req.DriverAccountNumber is not null && req.DriverBankCode is not null)
-                    {
-                        driver.AccountNumber = req.DriverAccountNumber;
-                        driver.BankCode = req.DriverBankCode;
-                        driver.PaystackRecipientCode = recipient;
-                        driver.Touch();
-                    }
-                }
-            }
-            else if (driver.PaystackRecipientCode is not null)
-            {
-                order.DriverRecipientCode = driver.PaystackRecipientCode;
             }
         }
 

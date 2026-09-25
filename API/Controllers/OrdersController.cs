@@ -10,6 +10,7 @@ using InstaSafe.Application.Features.Orders.Commands.VerifyOtp;
 using InstaSafe.Application.Features.Orders.DTOs;
 using InstaSafe.Application.Features.Orders.Queries.GetOrderById;
 using InstaSafe.Application.Features.Orders.Queries.GetOrderByReference;
+using InstaSafe.Application.Features.Orders.Queries.GetOrderTimeline;
 using InstaSafe.Application.Features.Vendors.Queries.GetVendorOrders;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -70,6 +71,16 @@ public class OrdersController : ControllerBase
         var result = await _mediator.Send(new GetOrderByReferenceQuery(reference), ct);
         if (!result.IsSuccess) return NotFound(ApiResponse<OrderDto>.FromResult(result));
         return Ok(ApiResponse<OrderDto>.FromResult(result));
+    }
+
+    /// <summary>Public customer tracker: ordered status timeline for an order reference. No auth.</summary>
+    [HttpGet("by-reference/{reference}/timeline")]
+    [AllowAnonymous]
+    public async Task<ActionResult<ApiResponse<OrderTimelineDto>>> GetTimeline(string reference, CancellationToken ct)
+    {
+        var result = await _mediator.Send(new GetOrderTimelineQuery(reference), ct);
+        if (!result.IsSuccess) return NotFound(ApiResponse<OrderTimelineDto>.FromResult(result));
+        return Ok(ApiResponse<OrderTimelineDto>.FromResult(result));
     }
 
     [HttpGet]

@@ -21,6 +21,12 @@ public static class ConversationTexts
         "2x Sneakers @22500\n" +
         "1x Belt @5000";
     public const string AskAmount = "What is the total amount in naira? (numbers only, e.g. 50000)";
+    public const string AskDeliveryFee =
+        "Agreed delivery fee in naira? (numbers only, e.g. 5000 — send 0 if no dispatch rider)";
+    public const string AskDriverPhone =
+        "What is the driver's phone number? (e.g. 08055556666 — or send SKIP if you deliver yourself)";
+    public const string AskDriverAccount = "What is the driver's account number? (10 digits)";
+    public const string AskDriverBank = "What is the driver's bank code? (e.g. 058 for GTB — ask your bank if unsure)";
 
     public const string AskTrackRef = "Please send your order reference (from your payment link or receipt). Type MENU to go back.";
 
@@ -46,12 +52,22 @@ public static class ConversationTexts
             : $"One more step: finish setup (payout details) here: {baseUrl}/onboarding";
 
     public static string ConfirmSummary(string customerName, string customerPhone, string address, string itemsLines, long totalNgn) =>
-        "Please confirm your order:\n" +
-        $"Customer: {customerName} ({customerPhone})\n" +
-        $"Address: {address}\n" +
-        $"Items:\n{itemsLines}\n" +
-        $"Total: ₦{totalNgn:N0}\n" +
-        "Reply YES to create the payment link, or CANCEL to stop.";
+        ConfirmSummary(customerName, customerPhone, address, itemsLines, totalNgn, 0, "");
+
+    public static string ConfirmSummary(
+        string customerName, string customerPhone, string address, string itemsLines,
+        long totalNgn, long deliveryFeeNgn, string driverPhone)
+    {
+        var feeLine = deliveryFeeNgn > 0 ? $"\nDelivery fee: ₦{deliveryFeeNgn:N0}" : "";
+        var driverLine = !string.IsNullOrWhiteSpace(driverPhone) ? $"\nDriver: {driverPhone}" : "";
+        return "Please confirm your order:\n" +
+            $"Customer: {customerName} ({customerPhone})\n" +
+            $"Address: {address}\n" +
+            $"Items:\n{itemsLines}\n" +
+            $"Total: ₦{totalNgn:N0}{feeLine}\n" +
+            $"Buyer pays: ₦{totalNgn + deliveryFeeNgn:N0}{driverLine}\n" +
+            "Reply YES to create the payment link, or CANCEL to stop.";
+    }
 
     public static string OrderCreated(long amountKobo, string? paystackAuthUrl) =>
         $"InstaSafe order created ✅\nAmount: ₦{amountKobo / 100:N0}\nPayment link: {paystackAuthUrl}";

@@ -1,7 +1,6 @@
 using InstaSafe.Application.Common.Helpers;
 using InstaSafe.Application.Common.Models;
 using InstaSafe.Application.Features.Dispatch.Commands.ConfirmDelivery;
-using InstaSafe.Application.Features.Dispatch.Commands.RegisterDispatcher;
 using InstaSafe.Application.Features.Dispatch.Commands.RequestDispatcherOtp;
 using InstaSafe.Application.Features.Dispatch.Commands.VerifyDispatcherOtp;
 using InstaSafe.Application.Features.Dispatch.DTOs;
@@ -25,16 +24,6 @@ public class DispatchController : ControllerBase
     public DispatchController(IMediator mediator, IOrderRepository orders, IMapper mapper)
     {
         _mediator = mediator; _orders = orders; _mapper = mapper;
-    }
-
-    [HttpPost("register")]
-    [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<DispatcherDto>>> Register(
-        [FromBody] RegisterDispatcherCommand cmd, CancellationToken ct)
-    {
-        var result = await _mediator.Send(cmd, ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<DispatcherDto>.FromResult(result));
-        return Ok(ApiResponse<DispatcherDto>.FromResult(result, "Dispatcher registered."));
     }
 
     [HttpPost("request-code")]

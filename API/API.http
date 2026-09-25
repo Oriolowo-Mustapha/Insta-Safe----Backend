@@ -133,16 +133,18 @@ Accept: application/json
 
 ###
 
-### Register dispatcher (public)
-POST {{InstaSafe_HostAddress}}/api/dispatch/register
+### Guest: customer order timeline (no auth)
+GET {{InstaSafe_HostAddress}}/api/orders/by-reference/ref-123/timeline
+Accept: application/json
+
+###
+
+### Driver login: request code with phone only (no account needed)
+POST {{InstaSafe_HostAddress}}/api/dispatch/request-code
 Content-Type: application/json
 
 {
-  "phone": "08055556666",
-  "firstName": "Musa",
-  "lastName": "Rider",
-  "accountNumber": "0123456789",
-  "bankCode": "058"
+  "phone": "08055556666"
 }
 
 ###

@@ -9,7 +9,11 @@ public sealed record OrderDraft(
     string CustomerPhone,
     string Address,
     List<DraftItem> Items,
-    long TotalNgn)
+    long TotalNgn,
+    long DeliveryFeeNgn = 0,
+    string DriverPhone = "",
+    string DriverAccountNumber = "",
+    string DriverBankCode = "")
 {
     public static OrderDraft Empty() => new("", "", "", new List<DraftItem>(), 0);
 
@@ -28,6 +32,8 @@ public sealed record OrderDraft(
 
     public string Save() => JsonSerializer.Serialize(this);
 
+    public bool WantsDispatch => DeliveryFeeNgn > 0 || !string.IsNullOrWhiteSpace(DriverPhone);
+
     public string MissingFields()
     {
         var missing = new List<string>();
@@ -36,6 +42,12 @@ public sealed record OrderDraft(
         if (string.IsNullOrWhiteSpace(Address)) missing.Add("delivery address");
         if (Items.Count == 0) missing.Add("items");
         if (TotalNgn <= 0) missing.Add("total amount");
+        if (WantsDispatch)
+        {
+            if (string.IsNullOrWhiteSpace(DriverPhone)) missing.Add("driver phone");
+            if (string.IsNullOrWhiteSpace(DriverAccountNumber)) missing.Add("driver account number");
+            if (string.IsNullOrWhiteSpace(DriverBankCode)) missing.Add("driver bank code");
+        }
         return string.Join(", ", missing);
     }
 

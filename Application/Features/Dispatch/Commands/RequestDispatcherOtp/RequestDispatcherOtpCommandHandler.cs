@@ -1,6 +1,7 @@
 using InstaSafe.Application.Common.Helpers;
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
+using InstaSafe.Domain.Entities;
 using MediatR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -25,9 +26,18 @@ public class RequestDispatcherOtpCommandHandler : IRequestHandler<RequestDispatc
     public async Task<Result<bool>> Handle(RequestDispatcherOtpCommand req, CancellationToken ct)
     {
         var phone = PhoneNormalizer.Normalize(req.Phone);
+        if (string.IsNullOrWhiteSpace(phone))
+            return Result<bool>.Failure("Phone number is required.");
+
+        // Phone-only identity: auto-provision the row on first OTP request.
         var dispatcher = await _dispatchers.GetByPhoneAsync(phone, ct);
-        if (dispatcher is null || !dispatcher.IsActive)
-            return Result<bool>.Failure("No active dispatcher found for this phone. Register first.");
+        if (dispatcher is null)
+        {
+            dispatcher = new Dispatcher { Phone = phone, IsActive = true };
+            await _dispatchers.AddAsync(dispatcher, ct);
+        }
+        if (!dispatcher.IsActive)
+            return Result<bool>.Failure("This driver account is deactivated.");
 
         var code = _otp.GenerateOtp();
         var salt = _otp.NewSalt();

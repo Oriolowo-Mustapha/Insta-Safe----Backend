@@ -71,11 +71,6 @@ public class AppDbContext : DbContext, IAppDbContext
         {
             e.HasKey(x => x.Id);
             e.Property(x => x.Phone).HasMaxLength(20).IsRequired();
-            e.Property(x => x.FirstName).HasMaxLength(120);
-            e.Property(x => x.LastName).HasMaxLength(120);
-            e.Property(x => x.AccountNumber).HasMaxLength(20);
-            e.Property(x => x.BankCode).HasMaxLength(10);
-            e.Property(x => x.PaystackRecipientCode).HasMaxLength(100);
             e.Property(x => x.OtpHash).HasMaxLength(200);
             e.HasIndex(x => x.Phone).IsUnique();
         });

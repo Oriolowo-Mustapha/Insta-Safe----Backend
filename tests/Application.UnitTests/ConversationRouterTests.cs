@@ -228,6 +228,8 @@ public class ConversationRouterTests
         await Send(phone, "Lekki Phase 1");
         Assert.Equal(ConversationStep.DraftItems, State(phone).Step);
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
+        await Send(phone, "0");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
         Assert.Contains("Please confirm", _sender.LastBody);
 
@@ -236,6 +238,105 @@ public class ConversationRouterTests
         Assert.Contains("Payment link", _sender.LastBody);
         Assert.Equal(ConversationStep.Idle, State(phone).Step);
         Assert.Contains(_vendors.Vendors, v => v.Phone == phone);
+    }
+
+    [Fact]
+    public async Task StepByStep_DispatchFlow_CollectsFeeAndDriver()
+    {
+        const string phone = "08010000010";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
+        CreateOrderCommand? captured = null;
+        _mediator.OnCreateOrder = cmd =>
+        {
+            captured = cmd;
+            return Result<OrderDto>.Success(new OrderDto(
+                Guid.NewGuid(), cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
+                cmd.DeliveryAddress, new(), 5000000, "NGN", OrderStatus.AwaitingPayment,
+                "ref-1", "https://pay.test/ref-1", null, null, null));
+        };
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "Lekki Phase 1");
+        await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
+
+        await Send(phone, "5000");
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+        await Send(phone, "08055556666");
+        Assert.Equal(ConversationStep.DraftDriverAccount, State(phone).Step);
+        await Send(phone, "0123456789");
+        Assert.Equal(ConversationStep.DraftDriverBank, State(phone).Step);
+        await Send(phone, "058");
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+        var summary = _sender.LastBody.Replace(",", "");
+        Assert.Contains("5000", summary);
+        Assert.Contains("50000", summary);
+
+        await Send(phone, "YES");
+
+        Assert.NotNull(captured);
+        Assert.Equal(5000, captured!.DeliveryFeeNgn);
+        Assert.Equal("08055556666", captured.DriverPhone);
+        Assert.Equal("0123456789", captured.DriverAccountNumber);
+        Assert.Equal("058", captured.DriverBankCode);
+        Assert.Contains("Payment link", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task StepByStep_SkipDriver_ClearsFee()
+    {
+        const string phone = "08010000011";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
+        _mediator.OnCreateOrder = cmd => Result<OrderDto>.Success(new OrderDto(
+            Guid.NewGuid(), cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
+            cmd.DeliveryAddress, new(), 4500000, "NGN", OrderStatus.AwaitingPayment,
+            "ref-1", "https://pay.test/ref-1", null, null, null));
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "Lekki");
+        await Send(phone, "2x Sneakers @22500");
+        await Send(phone, "5000");
+        await Send(phone, "skip");
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+
+        await Send(phone, "YES");
+        Assert.Contains("Payment link", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task StepByStep_BadBankCode_Reasks()
+    {
+        const string phone = "08010000012";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000,
+            5000, "08055556666");
+        _mediator.OnCreateOrder = cmd => Result<OrderDto>.Success(new OrderDto(
+            Guid.NewGuid(), cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
+            cmd.DeliveryAddress, new(), 5000000, "NGN", OrderStatus.AwaitingPayment,
+            "ref-1", "https://pay.test/ref-1", null, null, null));
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "Lekki");
+        await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
+        await Send(phone, "5000");
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+        await Send(phone, "08055556666");
+        Assert.Equal(ConversationStep.DraftDriverAccount, State(phone).Step);
+        await Send(phone, "0123456789");
+        await Send(phone, "05");
+        Assert.Equal(ConversationStep.DraftDriverBank, State(phone).Step);
+        Assert.Contains("3 digits", _sender.LastBody);
+        await Send(phone, "058");
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
     }
 
     [Fact]

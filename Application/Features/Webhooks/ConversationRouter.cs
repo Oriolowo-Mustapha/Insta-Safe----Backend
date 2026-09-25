@@ -65,7 +65,7 @@ public class ConversationRouter
             return true;
         }
         var upper = text.ToUpperInvariant();
-        if (upper is "MENU" or "0")
+        if (upper is "MENU")
         {
             Reset(state);
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Menu,
@@ -117,6 +117,18 @@ public class ConversationRouter
                 break;
             case Domain.Entities.ConversationStep.DraftAmount:
                 await HandleAmountStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDeliveryFee:
+                await HandleFeeStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDriverPhone:
+                await HandleDriverPhoneStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDriverAccount:
+                await HandleDriverAccountStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDriverBank:
+                await HandleDriverBankStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.Confirming:
                 await HandleConfirmStepAsync(state, phone, replyTo, text, draft, ct);
@@ -247,7 +259,9 @@ public class ConversationRouter
                 _sanitizer.Clean(i.Description, 300),
                 i.Quantity <= 0 ? 1 : i.Quantity,
                 i.UnitPriceNgn)).ToList(),
-            parsed.TotalNgn);
+            parsed.TotalNgn,
+            parsed.DeliveryFeeNgn < 0 ? 0 : parsed.DeliveryFeeNgn,
+            _sanitizer.Clean(PhoneNormalizer.Normalize(parsed.DriverPhone), 20));
 
         if (draft.IsComplete())
         {
@@ -293,8 +307,8 @@ public class ConversationRouter
         if (parsed.TotalNgn > 0) draft = draft with { TotalNgn = parsed.TotalNgn };
 
         if (draft.TotalNgn > 0)
-            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
-                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDeliveryFee,
+                Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
         else
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskAmount,
                 Domain.Entities.ConversationStep.DraftAmount, ct, draft);
@@ -307,8 +321,8 @@ public class ConversationRouter
         if (long.TryParse(digits, out var amount) && amount > 0)
         {
             draft = draft with { TotalNgn = amount };
-            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
-                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDeliveryFee,
+                Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
         }
         else
         {
@@ -316,6 +330,84 @@ public class ConversationRouter
                 "I need a number for the total, e.g. 50000.",
                 state.Step, ct);
         }
+    }
+
+    private async Task HandleFeeStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var digits = new string(text.Where(char.IsDigit).ToArray());
+        if (!long.TryParse(string.IsNullOrEmpty(digits) ? "0" : digits, out var fee) || fee < 0)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Send the delivery fee as a number, e.g. 5000 — or 0 for none.",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { DeliveryFeeNgn = fee };
+        if (fee == 0)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            return;
+        }
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverPhone,
+            Domain.Entities.ConversationStep.DraftDriverPhone, ct, draft);
+    }
+
+    private async Task HandleDriverPhoneStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var upper = text.ToUpperInvariant();
+        if (upper is "SKIP" or "NONE" or "0")
+        {
+            draft = draft with { DeliveryFeeNgn = 0, DriverPhone = "", DriverAccountNumber = "", DriverBankCode = "" };
+            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            return;
+        }
+        var driverPhone = PhoneNormalizer.Normalize(text);
+        if (driverPhone.Length < 7)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "That doesn't look like a phone number. Send the driver's number or SKIP.",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { DriverPhone = _sanitizer.Clean(driverPhone, 20) };
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverAccount,
+            Domain.Entities.ConversationStep.DraftDriverAccount, ct, draft);
+    }
+
+    private async Task HandleDriverAccountStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var digits = new string(text.Where(char.IsDigit).ToArray());
+        if (digits.Length < 10)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Account number should be at least 10 digits. Please resend it.",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { DriverAccountNumber = _sanitizer.Clean(digits, 20) };
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverBank,
+            Domain.Entities.ConversationStep.DraftDriverBank, ct, draft);
+    }
+
+    private async Task HandleDriverBankStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var digits = new string(text.Where(char.IsDigit).ToArray());
+        if (digits.Length != 3)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Bank code should be 3 digits (e.g. 058 for GTB). Please resend it.",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { DriverBankCode = digits };
+        await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+            Domain.Entities.ConversationStep.Confirming, ct, draft);
     }
 
     private async Task HandleConfirmStepAsync(
@@ -344,7 +436,12 @@ public class ConversationRouter
                 draft.Address,
                 draft.Items.Select(i => new OrderItemInput(i.Description, i.Quantity, i.UnitPriceNgn)).ToList(),
                 draft.TotalNgn,
-                $"{phone}@whatsapp.instasafe"), ct);
+                $"{phone}@whatsapp.instasafe",
+                Fulfillment: Domain.Enums.FulfillmentType.Dispatch,
+                DeliveryFeeNgn: draft.DeliveryFeeNgn,
+                DriverPhone: string.IsNullOrWhiteSpace(draft.DriverPhone) ? null : draft.DriverPhone,
+                DriverAccountNumber: string.IsNullOrWhiteSpace(draft.DriverAccountNumber) ? null : draft.DriverAccountNumber,
+                DriverBankCode: string.IsNullOrWhiteSpace(draft.DriverBankCode) ? null : draft.DriverBankCode), ct);
 
             if (result.IsSuccess)
             {
@@ -457,7 +554,8 @@ public class ConversationRouter
     private static string ConfirmText(OrderDraft draft) =>
         ConversationTexts.ConfirmSummary(
             draft.CustomerName, draft.CustomerPhone, draft.Address,
-            draft.ItemsSummary(), draft.TotalNgn);
+            draft.ItemsSummary(), draft.TotalNgn,
+            draft.DeliveryFeeNgn, draft.DriverPhone);
 
     private static Domain.Entities.ConversationStep FirstMissingStep(OrderDraft draft)
     {
@@ -465,7 +563,14 @@ public class ConversationRouter
         if (string.IsNullOrWhiteSpace(draft.CustomerPhone)) return Domain.Entities.ConversationStep.DraftCustomerPhone;
         if (string.IsNullOrWhiteSpace(draft.Address)) return Domain.Entities.ConversationStep.DraftAddress;
         if (draft.Items.Count == 0) return Domain.Entities.ConversationStep.DraftItems;
-        return Domain.Entities.ConversationStep.DraftAmount;
+        if (draft.TotalNgn <= 0) return Domain.Entities.ConversationStep.DraftAmount;
+        if (draft.WantsDispatch)
+        {
+            if (string.IsNullOrWhiteSpace(draft.DriverPhone)) return Domain.Entities.ConversationStep.DraftDriverPhone;
+            if (string.IsNullOrWhiteSpace(draft.DriverAccountNumber)) return Domain.Entities.ConversationStep.DraftDriverAccount;
+            if (string.IsNullOrWhiteSpace(draft.DriverBankCode)) return Domain.Entities.ConversationStep.DraftDriverBank;
+        }
+        return Domain.Entities.ConversationStep.DraftDeliveryFee;
     }
 
     private static string PromptFor(Domain.Entities.ConversationStep step) => step switch
@@ -475,6 +580,10 @@ public class ConversationRouter
         Domain.Entities.ConversationStep.DraftAddress => ConversationTexts.AskAddress,
         Domain.Entities.ConversationStep.DraftItems => ConversationTexts.AskItems,
         Domain.Entities.ConversationStep.DraftAmount => ConversationTexts.AskAmount,
+        Domain.Entities.ConversationStep.DraftDeliveryFee => ConversationTexts.AskDeliveryFee,
+        Domain.Entities.ConversationStep.DraftDriverPhone => ConversationTexts.AskDriverPhone,
+        Domain.Entities.ConversationStep.DraftDriverAccount => ConversationTexts.AskDriverAccount,
+        Domain.Entities.ConversationStep.DraftDriverBank => ConversationTexts.AskDriverBank,
         _ => ConversationTexts.Menu
     };
 }
