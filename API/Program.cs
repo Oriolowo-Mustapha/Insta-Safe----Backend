@@ -31,6 +31,21 @@ builder.Host.UseSerilog((ctx, cfg) =>
     var aiConnection = ctx.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
     if (!string.IsNullOrWhiteSpace(aiConnection))
         cfg.WriteTo.ApplicationInsights(aiConnection, new TraceTelemetryConverter());
+
+    // Windows App Service swallows console stdout (generated web.config sets
+    // stdoutLogEnabled=false), so also log to LogFiles where Log Stream tails.
+    // Active only on Azure (WEBSITE_SITE_NAME) unless Serilog:FileDir overrides.
+    var fileDir = ctx.Configuration["Serilog:FileDir"];
+    if (!string.IsNullOrWhiteSpace(fileDir) || Environment.GetEnvironmentVariable("WEBSITE_SITE_NAME") is not null)
+    {
+        var dir = string.IsNullOrWhiteSpace(fileDir)
+            ? Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? ".", "LogFiles", "Application")
+            : fileDir;
+        cfg.WriteTo.File(new CompactJsonFormatter(), Path.Combine(dir, "instasafe-.log"),
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 7,
+            shared: true);
+    }
 });
 
 builder.Services.AddApplicationInsightsTelemetry();
