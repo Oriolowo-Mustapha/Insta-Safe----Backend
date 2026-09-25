@@ -1,7 +1,9 @@
 using DotNetEnv;
 using InstaSafe.Api.Middleware;
 using InstaSafe.Infrastructure;
+using InstaSafe.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
 using System.Text;
@@ -24,7 +26,8 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen(o =>
 {
-    o.SwaggerDoc("v1", new() { Title = "InstaSafe API", Version = "v1" });
+	o.CustomSchemaIds(type => type.FullName);
+	o.SwaggerDoc("v1", new() { Title = "InstaSafe API", Version = "v1" });
 });
 
 builder.Services.AddInfrastructure(builder.Configuration);
@@ -51,6 +54,15 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+// Azure App Service has no local migration step: set ApplyMigrations=true
+// in App Settings once and the schema (all EF migrations) is created on boot.
+if (string.Equals(builder.Configuration["ApplyMigrations"], "true", StringComparison.OrdinalIgnoreCase))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+}
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 

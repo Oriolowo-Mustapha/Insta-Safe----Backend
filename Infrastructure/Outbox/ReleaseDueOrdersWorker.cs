@@ -36,15 +36,22 @@ public class ReleaseDueOrdersWorker : BackgroundService
                 var notifier = scope.ServiceProvider.GetRequiredService<OrderNotifier>();
 
                 var now = DateTimeOffset.UtcNow;
-                var due = await db.Orders
+                // Two separate queries: Union over Order (which owns Items as JSON)
+                // crashes EF query translation (NullReference in the expanding visitor).
+                var deliveredDue = await db.Orders
                     .Where(o => o.Status == OrderStatus.Delivered && o.ReleaseDueAt != null && o.ReleaseDueAt <= now)
-                    .Union(db.Orders.Where(o =>
-                        o.Status == OrderStatus.Held
-                        && o.Fulfillment == FulfillmentType.Digital
-                        && o.HeldAt != null
-                        && o.HeldAt <= now.Subtract(DigitalAutoReleaseAfter)))
+                    .OrderBy(o => o.ReleaseDueAt)
                     .Take(20)
                     .ToListAsync(ct);
+                var digitalDue = await db.Orders
+                    .Where(o => o.Status == OrderStatus.Held
+                        && o.Fulfillment == FulfillmentType.Digital
+                        && o.HeldAt != null
+                        && o.HeldAt <= now.Subtract(DigitalAutoReleaseAfter))
+                    .OrderBy(o => o.HeldAt)
+                    .Take(20)
+                    .ToListAsync(ct);
+                var due = deliveredDue.Concat(digitalDue).Take(20).ToList();
 
                 foreach (var order in due)
                 {

@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\API\InstaSafe.Api.csproj" />
+    <ProjectReference Include="..\..\API\API.csproj" />
   </ItemGroup>
 
 </Project>

@@ -40,7 +40,7 @@ public class DispatchController : ControllerBase
     [HttpPost("request-code")]
     [AllowAnonymous]
     public async Task<ActionResult<ApiResponse<bool>>> RequestCode(
-        [FromBody] RequestCodeRequest body, CancellationToken ct)
+        [FromBody] DispatchRequestCodeRequest body, CancellationToken ct)
     {
         var result = await _mediator.Send(new RequestDispatcherOtpCommand(body.Phone), ct);
         if (!result.IsSuccess) return NotFound(ApiResponse<bool>.FromResult(result));
@@ -50,7 +50,7 @@ public class DispatchController : ControllerBase
     [HttpPost("verify-code")]
     [AllowAnonymous]
     public async Task<ActionResult<ApiResponse<DispatcherAuthResponse>>> VerifyCode(
-        [FromBody] VerifyCodeRequest body, CancellationToken ct)
+        [FromBody] DispatchVerifyCodeRequest body, CancellationToken ct)
     {
         var result = await _mediator.Send(new VerifyDispatcherOtpCommand(body.Phone, body.Code), ct);
         if (!result.IsSuccess) return Unauthorized(ApiResponse<DispatcherAuthResponse>.FromResult(result));
@@ -84,7 +84,7 @@ public class DispatchController : ControllerBase
         return Ok(ApiResponse<OrderDto>.FromResult(result, "Delivery confirmed. Rider fee on its way."));
     }
 
-    public sealed record RequestCodeRequest(string Phone);
-    public sealed record VerifyCodeRequest(string Phone, string Code);
+    public sealed record DispatchRequestCodeRequest(string Phone);
+    public sealed record DispatchVerifyCodeRequest(string Phone, string Code);
     public sealed record ConfirmRequest(string Otp);
 }
