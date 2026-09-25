@@ -26,7 +26,6 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen(o =>
 {
-	o.CustomSchemaIds(type => type.FullName);
 	o.SwaggerDoc("v1", new() { Title = "InstaSafe API", Version = "v1" });
 });
 
