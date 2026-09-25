@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
+using Serilog.Formatting.Compact;
+using Serilog.Sinks.ApplicationInsights.TelemetryConverters;
 using System.Text;
 
 Env.TraversePath().Load();
@@ -13,9 +15,25 @@ Env.TraversePath().Load();
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((ctx, cfg) =>
+{
     cfg.ReadFrom.Configuration(ctx.Configuration)
        .Enrich.FromLogContext()
-       .WriteTo.Console());
+       .Enrich.WithMachineName()
+       .Enrich.WithEnvironmentName();
+
+    // Render/Railway-style: single-line JSON in production, human-readable locally.
+    if (ctx.HostingEnvironment.IsDevelopment())
+        cfg.WriteTo.Console();
+    else
+        cfg.WriteTo.Console(new CompactJsonFormatter());
+
+    // Application Insights when configured (Azure). Absent locally = no-op.
+    var aiConnection = ctx.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+    if (!string.IsNullOrWhiteSpace(aiConnection))
+        cfg.WriteTo.ApplicationInsights(aiConnection, new TraceTelemetryConverter());
+});
+
+builder.Services.AddApplicationInsightsTelemetry();
 
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
@@ -64,6 +82,9 @@ if (string.Equals(builder.Configuration["ApplyMigrations"], "true", StringCompar
 }
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+app.UseMiddleware<RequestCorrelationMiddleware>();
+app.UseSerilogRequestLogging(o =>
+    o.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.00} ms [{RequestId}]");
 
 app.UseAuthentication();
 app.UseAuthorization();
