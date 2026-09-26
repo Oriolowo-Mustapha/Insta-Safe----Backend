@@ -64,4 +64,26 @@ public class PaystackResolveTests
         Assert.Null(name);
         Assert.Contains("Check the number", error);
     }
+
+    [Fact]
+    public async Task ListBanks_ParsesNameSlugCode()
+    {
+        var client = Client(HttpStatusCode.OK,
+            """{"status":true,"data":[{"name":"Guaranty Trust Bank","slug":"guaranty-trust-bank","code":"058"},{"name":"Bad Entry","slug":"","code":""}]}""");
+
+        var banks = await client.ListTransferBanksAsync(CancellationToken.None);
+
+        Assert.Equal(2, banks.Count);
+        Assert.Equal(("Guaranty Trust Bank", "guaranty-trust-bank", "058"), banks[0]);
+    }
+
+    [Fact]
+    public async Task ListBanks_Failure_ReturnsEmpty()
+    {
+        var client = Client(HttpStatusCode.InternalServerError, "{}");
+
+        var banks = await client.ListTransferBanksAsync(CancellationToken.None);
+
+        Assert.Empty(banks);
+    }
 }
