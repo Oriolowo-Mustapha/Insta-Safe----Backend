@@ -60,6 +60,19 @@ builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen(o =>
 {
 	o.SwaggerDoc("v1", new() { Title = "InstaSafe API", Version = "v1" });
+	o.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.OpenApiSecurityScheme
+	{
+		Description = "Vendor/driver JWT. Enter: Bearer {your token}",
+		Name = "Authorization",
+		In = Microsoft.OpenApi.ParameterLocation.Header,
+		Type = Microsoft.OpenApi.SecuritySchemeType.Http,
+		Scheme = "bearer",
+		BearerFormat = "JWT"
+	});
+	o.AddSecurityRequirement(doc => new Microsoft.OpenApi.OpenApiSecurityRequirement
+	{
+		[new Microsoft.OpenApi.OpenApiSecuritySchemeReference("Bearer", doc)] = []
+	});
 });
 
 builder.Services.AddInfrastructure(builder.Configuration);
