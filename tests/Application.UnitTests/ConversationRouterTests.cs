@@ -178,11 +178,14 @@ public class ConversationRouterTests
             => Task.FromResult(new List<(string Name, string Slug, string Code)>());
         public Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
             => Task.FromResult(Banks.Select(b => (b.Name, b.Slug, b.Code)).ToList());
-        public Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
+        public Task<AccountResolveResult> ResolveAccountAsync(
             string accountNumber, string bankCode, CancellationToken ct)
-            => Task.FromResult(HolderName is null
-                ? (false, (string?)null, "bad account")
-                : (true, HolderName, (string?)null));
+            => Task.FromResult(NextFailureKind == ResolveFailureKind.Unavailable
+                ? new AccountResolveResult(false, null, ResolveFailureKind.Unavailable, "service down")
+                : HolderName is null
+                    ? new AccountResolveResult(false, null, ResolveFailureKind.Invalid, "bad account")
+                    : new AccountResolveResult(true, HolderName, ResolveFailureKind.Invalid, ""));
+        public ResolveFailureKind NextFailureKind { get; set; } = ResolveFailureKind.Invalid;
     }
 
     private readonly FakeStates _states = new();
@@ -425,12 +428,13 @@ public class ConversationRouterTests
     }
 
     [Fact]
-    public async Task StepByStep_UnverifiableAccount_BackToAccount()
+    public async Task StepByStep_InvalidAccount_BackToAccount()
     {
         const string phone = "08010000014";
         _parser.NextParsed = new ParsedOrder("", "", "",
             new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
         _paystack.HolderName = null;
+        _paystack.NextFailureKind = ResolveFailureKind.Invalid;
 
         await Send(phone, "1");
         await Send(phone, "Chidi");
@@ -443,6 +447,36 @@ public class ConversationRouterTests
         await Send(phone, "GTBank");
         Assert.Equal(ConversationStep.DraftDriverAccount, State(phone).Step);
         Assert.Contains("couldn't verify", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task StepByStep_ServiceDown_ContinuesWithSelfCheck()
+    {
+        const string phone = "08010000015";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
+        _paystack.NextFailureKind = ResolveFailureKind.Unavailable;
+        _mediator.OnCreateOrder = cmd => Result<OrderDto>.Success(new OrderDto(
+            Guid.NewGuid(), cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
+            cmd.DeliveryAddress, new(), 5000000, "NGN", OrderStatus.AwaitingPayment,
+            "ref-1", "https://pay.test/ref-1", null, null, null));
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "Lekki");
+        await Send(phone, "2x Sneakers @22500");
+        await Send(phone, "5000");
+        await Send(phone, "08055556666");
+        await Send(phone, "0123456789");
+        await Send(phone, "GTBank");
+
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+        Assert.Contains("temporarily unavailable", _sender.Sent[^2].Body);
+        Assert.Contains("unverified", _sender.LastBody);
+
+        await Send(phone, "YES");
+        Assert.Contains("Payment link", _sender.LastBody);
     }
 
     [Fact]

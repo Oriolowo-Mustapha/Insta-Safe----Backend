@@ -83,11 +83,14 @@ public static class ConversationTexts
 
     public static string ConfirmSummary(
         string customerName, string customerPhone, string address, string itemsLines,
-        long totalNgn, long deliveryFeeNgn, string driverPhone, string driverBank = "")
+        long totalNgn, long deliveryFeeNgn, string driverPhone, string driverBank = "",
+        string driverHolder = "")
     {
         var feeLine = deliveryFeeNgn > 0 ? $"\nDelivery fee: ₦{deliveryFeeNgn:N0}" : "";
         var driverLine = !string.IsNullOrWhiteSpace(driverPhone)
             ? $"\nDriver: {driverPhone}" + (string.IsNullOrWhiteSpace(driverBank) ? "" : $" ({driverBank})")
+                + (!string.IsNullOrWhiteSpace(driverBank) && string.IsNullOrWhiteSpace(driverHolder)
+                    ? " — holder unverified, please double-check" : "")
             : "";
         return "Please confirm your order:\n" +
             $"Customer: {customerName} ({customerPhone})\n" +

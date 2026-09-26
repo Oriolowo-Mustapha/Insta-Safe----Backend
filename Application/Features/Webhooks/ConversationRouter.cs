@@ -496,20 +496,40 @@ public class ConversationRouter
             return;
         }
 
-        string? holder;
+        InstaSafe.Application.Common.Interfaces.AccountResolveResult resolved;
         try
         {
-            var (ok, name, _) = await _paystack.ResolveAccountAsync(draft.DriverAccountNumber, bank.Code, ct);
-            holder = ok ? name : null;
+            resolved = await _paystack.ResolveAccountAsync(draft.DriverAccountNumber, bank.Code, ct);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Driver account resolve failed");
-            holder = null;
+            resolved = new AccountResolveResult(
+                false, null, ResolveFailureKind.Unavailable,
+                "Bank verification is temporarily unavailable.");
         }
 
-        if (string.IsNullOrWhiteSpace(holder))
+        if (!resolved.Success)
         {
+            if (resolved.FailureKind == ResolveFailureKind.Unavailable)
+            {
+                // Verification service down (e.g. test-mode daily limit):
+                // don't block the order — vendor self-checks and continues.
+                draft = draft with
+                {
+                    DriverBankCode = bank.Code,
+                    DriverBankName = bank.Name,
+                    DriverHolderName = ""
+                };
+                await ReplyAndSaveAsync(state, phone, replyTo,
+                    $"Bank verification is temporarily unavailable, so I couldn't confirm the holder name.\n" +
+                    $"Please double-check these yourself — {bank.Name}, {draft.DriverAccountNumber}. " +
+                    "If they're correct, we'll continue.",
+                    Domain.Entities.ConversationStep.Confirming, ct, draft);
+                await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+                    Domain.Entities.ConversationStep.Confirming, ct, draft);
+                return;
+            }
             await ReplyAndSaveAsync(state, phone, replyTo,
                 $"I couldn't verify account {draft.DriverAccountNumber} at {bank.Name}. " +
                 "Please resend the driver account number, or CANCEL to stop.",
@@ -518,6 +538,7 @@ public class ConversationRouter
             return;
         }
 
+        var holder = resolved.AccountName!;
         draft = draft with { DriverBankCode = bank.Code, DriverBankName = bank.Name, DriverHolderName = holder };
         await ReplyAndSaveAsync(state, phone, replyTo,
             ConversationTexts.DriverDetailsConfirm(bank.Name, draft.DriverAccountNumber, holder),
@@ -807,7 +828,8 @@ public class ConversationRouter
         ConversationTexts.ConfirmSummary(
             draft.CustomerName, draft.CustomerPhone, draft.Address,
             draft.ItemsSummary(), draft.TotalNgn,
-            draft.DeliveryFeeNgn, draft.DriverPhone, draft.DriverBankName);
+            draft.DeliveryFeeNgn, draft.DriverPhone, draft.DriverBankName,
+            draft.DriverHolderName);
 
     private static Domain.Entities.ConversationStep FirstMissingStep(OrderDraft draft)
     {

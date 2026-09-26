@@ -2,7 +2,6 @@ using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-
 namespace InstaSafe.Api.Controllers;
 
 [ApiController]
@@ -41,9 +40,16 @@ public class PaymentsController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(accountNumber) || string.IsNullOrWhiteSpace(bankCode))
             return BadRequest(ApiResponse<ResolveDto>.FailureResponse("accountNumber and bankCode are required."));
-        var (ok, name, error) = await _paystack.ResolveAccountAsync(accountNumber.Trim(), bankCode.Trim(), ct);
-        if (!ok) return BadRequest(ApiResponse<ResolveDto>.FailureResponse(error ?? "Account verification failed."));
-        return Ok(ApiResponse<ResolveDto>.SuccessResponse(new ResolveDto(accountNumber.Trim(), bankCode.Trim(), name!)));
+        var result = await _paystack.ResolveAccountAsync(accountNumber.Trim(), bankCode.Trim(), ct);
+        if (!result.Success)
+        {
+            if (result.FailureKind == ResolveFailureKind.Unavailable)
+                return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    ApiResponse<ResolveDto>.FailureResponse(result.Error));
+            return BadRequest(ApiResponse<ResolveDto>.FailureResponse(result.Error));
+        }
+        return Ok(ApiResponse<ResolveDto>.SuccessResponse(
+            new ResolveDto(accountNumber.Trim(), bankCode.Trim(), result.AccountName!)));
     }
 
     public sealed record BankDto(string Name, string Slug, string Code);

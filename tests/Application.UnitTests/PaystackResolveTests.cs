@@ -1,3 +1,4 @@
+using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Infrastructure.ExternalServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Net;
@@ -45,25 +46,48 @@ public class PaystackResolveTests
         var client = Client(HttpStatusCode.OK,
             """{"status":true,"data":{"account_number":"0123456789","account_name":"ADA OBI"}}""");
 
-        var (ok, name, error) = await client.ResolveAccountAsync("0123456789", "058", CancellationToken.None);
+        var result = await client.ResolveAccountAsync("0123456789", "058", CancellationToken.None);
 
-        Assert.True(ok);
-        Assert.Equal("ADA OBI", name);
-        Assert.Null(error);
+        Assert.True(result.Success);
+        Assert.Equal("ADA OBI", result.AccountName);
     }
 
     [Fact]
-    public async Task Resolve_BadAccount_ReturnsFriendlyError()
+    public async Task Resolve_BadAccount_ReturnsInvalidWithReason()
     {
         var client = Client(HttpStatusCode.BadRequest,
             """{"status":false,"message":"Invalid account number"}""");
 
-        var (ok, name, error) = await client.ResolveAccountAsync("000", "058", CancellationToken.None);
+        var result = await client.ResolveAccountAsync("000", "058", CancellationToken.None);
 
-        Assert.False(ok);
-        Assert.Null(name);
-        Assert.Contains("Invalid account number", error);
-        Assert.Contains("Check the number", error);
+        Assert.False(result.Success);
+        Assert.Equal(ResolveFailureKind.Invalid, result.FailureKind);
+        Assert.Contains("Invalid account number", result.Error);
+        Assert.Contains("Check the number", result.Error);
+    }
+
+    [Fact]
+    public async Task Resolve_RateLimit_ReturnsUnavailable()
+    {
+        var client = Client(HttpStatusCode.BadRequest,
+            """{"status":false,"message":"Test mode daily limit of 3 live bank resolves exceeded. Use test bank codes 001."}""");
+
+        var result = await client.ResolveAccountAsync("0123456789", "058", CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ResolveFailureKind.Unavailable, result.FailureKind);
+        Assert.Contains("temporarily unavailable", result.Error);
+    }
+
+    [Fact]
+    public async Task Resolve_ServerError_ReturnsUnavailable()
+    {
+        var client = Client(HttpStatusCode.BadGateway, "oops");
+
+        var result = await client.ResolveAccountAsync("0123456789", "058", CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(ResolveFailureKind.Unavailable, result.FailureKind);
     }
 
     [Fact]

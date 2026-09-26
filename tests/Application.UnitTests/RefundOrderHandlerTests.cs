@@ -86,9 +86,9 @@ public class RefundOrderHandlerTests
             => Task.FromResult((true, (string?)"0123456789", (string?)"IN Heap Ogbonna", (string?)"Wema", (string?)null));
         public Task<System.Collections.Generic.List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
             => Task.FromResult(new System.Collections.Generic.List<(string Name, string Slug, string Code)>());
-        public Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
+        public Task<AccountResolveResult> ResolveAccountAsync(
             string accountNumber, string bankCode, CancellationToken ct)
-            => Task.FromResult((true, (string?)"Ada Obi", (string?)null));
+            => Task.FromResult(new AccountResolveResult(true, "Ada Obi", ResolveFailureKind.Invalid, ""));
         public Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
             => Task.FromResult(new List<(string Name, string Slug, string Code)>());
     }

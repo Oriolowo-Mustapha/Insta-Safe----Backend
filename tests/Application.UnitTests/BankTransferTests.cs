@@ -48,9 +48,9 @@ public class BankTransferTests : IDisposable
                 : (false, (string?)null, (string?)null, (string?)null, "assign failed"));
         public Task<List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
             => Task.FromResult(new List<(string Name, string Slug, string Code)>());
-        public Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
+        public Task<AccountResolveResult> ResolveAccountAsync(
             string accountNumber, string bankCode, CancellationToken ct)
-            => Task.FromResult((true, (string?)"Ada Obi", (string?)null));
+            => Task.FromResult(new AccountResolveResult(true, "Ada Obi", ResolveFailureKind.Invalid, ""));
         public Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
             => Task.FromResult(new List<(string Name, string Slug, string Code)>
             {

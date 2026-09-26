@@ -208,7 +208,7 @@ public class PaystackClient : IPaystackClient
         return all;
     }
 
-    public async Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
+    public async Task<AccountResolveResult> ResolveAccountAsync(
         string accountNumber, string bankCode, CancellationToken ct)
     {
         var res = await _http.GetAsync(
@@ -217,21 +217,36 @@ public class PaystackClient : IPaystackClient
         if (!res.IsSuccessStatusCode)
         {
             _logger.LogWarning("Account resolve failed: {Status} {Body}", res.StatusCode, raw);
-            return (false, null, $"Could not verify this account ({PaystackMessage(raw)}). Check the number and bank, then retry.");
+            var paystackMsg = PaystackMessage(raw);
+            if (IsServiceDown(res.StatusCode, paystackMsg))
+                return new AccountResolveResult(false, null, ResolveFailureKind.Unavailable,
+                    "Bank verification is temporarily unavailable. Please double-check the account number and bank yourself and continue — we'll retry verification later.");
+            return new AccountResolveResult(false, null, ResolveFailureKind.Invalid,
+                $"Could not verify this account ({paystackMsg}). Check the number and bank, then retry.");
         }
         try
         {
             using var doc = JsonDocument.Parse(raw);
             var name = doc.RootElement.GetProperty("data").GetProperty("account_name").GetString();
             if (string.IsNullOrWhiteSpace(name))
-                return (false, null, "No account name returned. Check the number and bank, then retry.");
-            return (true, name, null);
+                return new AccountResolveResult(false, null, ResolveFailureKind.Invalid,
+                    "No account name returned. Check the number and bank, then retry.");
+            return new AccountResolveResult(true, name, ResolveFailureKind.Invalid, "");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Account resolve response unparseable");
-            return (false, null, "Account verification unreadable. Try again.");
+            return new AccountResolveResult(false, null, ResolveFailureKind.Unavailable,
+                "Bank verification is temporarily unavailable. Please double-check the details yourself and continue.");
         }
+    }
+
+    private static bool IsServiceDown(System.Net.HttpStatusCode status, string message)
+    {
+        if ((int)status == 429 || (int)status >= 500) return true;
+        var m = message.ToLowerInvariant();
+        return m.Contains("limit") || m.Contains("exceed") || m.Contains("unavailable")
+            || m.Contains("try again later") || m.Contains("timeout") || m.Contains("test bank codes");
     }
 
     private static string PaystackMessage(string raw)
