@@ -56,12 +56,13 @@ public class PaystackResolveTests
     public async Task Resolve_BadAccount_ReturnsFriendlyError()
     {
         var client = Client(HttpStatusCode.BadRequest,
-            """{"status":false,"message":"Invalid account"}""");
+            """{"status":false,"message":"Invalid account number"}""");
 
         var (ok, name, error) = await client.ResolveAccountAsync("000", "058", CancellationToken.None);
 
         Assert.False(ok);
         Assert.Null(name);
+        Assert.Contains("Invalid account number", error);
         Assert.Contains("Check the number", error);
     }
 

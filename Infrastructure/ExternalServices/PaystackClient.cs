@@ -217,7 +217,7 @@ public class PaystackClient : IPaystackClient
         if (!res.IsSuccessStatusCode)
         {
             _logger.LogWarning("Account resolve failed: {Status} {Body}", res.StatusCode, raw);
-            return (false, null, "Could not verify this account. Check the number and bank, then retry.");
+            return (false, null, $"Could not verify this account ({PaystackMessage(raw)}). Check the number and bank, then retry.");
         }
         try
         {
@@ -231,6 +231,21 @@ public class PaystackClient : IPaystackClient
         {
             _logger.LogWarning(ex, "Account resolve response unparseable");
             return (false, null, "Account verification unreadable. Try again.");
+        }
+    }
+
+    private static string PaystackMessage(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.TryGetProperty("message", out var m)
+                ? m.GetString() ?? "rejected"
+                : "rejected";
+        }
+        catch
+        {
+            return "rejected";
         }
     }
 }
