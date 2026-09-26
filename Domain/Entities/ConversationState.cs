@@ -14,7 +14,8 @@ public enum ConversationStep
     DraftDeliveryFee = 9,
     DraftDriverPhone = 10,
     DraftDriverAccount = 11,
-    DraftDriverBank = 12
+    DraftDriverBankName = 12,
+    DraftDriverConfirm = 13
 }
 
 public class ConversationState : Common.BaseEntity

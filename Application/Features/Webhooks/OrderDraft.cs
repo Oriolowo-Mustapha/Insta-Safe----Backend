@@ -13,7 +13,9 @@ public sealed record OrderDraft(
     long DeliveryFeeNgn = 0,
     string DriverPhone = "",
     string DriverAccountNumber = "",
-    string DriverBankCode = "")
+    string DriverBankCode = "",
+    string DriverBankName = "",
+    string DriverHolderName = "")
 {
     public static OrderDraft Empty() => new("", "", "", new List<DraftItem>(), 0);
 

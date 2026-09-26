@@ -19,6 +19,7 @@ public static class DependencyInjection
         services.AddAutoMapper(cfg => cfg.AddMaps(typeof(DependencyInjection).Assembly));
         services.AddValidatorsFromAssembly(typeof(DependencyInjection).Assembly);
         services.AddScoped<Features.Webhooks.ConversationRouter>();
+        services.AddScoped<Common.Helpers.BankDirectory>();
         services.AddScoped<Common.Notifications.OrderNotifier>();
         return services;
     }

@@ -1,3 +1,4 @@
+using InstaSafe.Application.Common.Helpers;
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
 using InstaSafe.Application.Features.Orders.Commands.CreateOrder;
@@ -134,19 +135,58 @@ public class ConversationRouterTests
         public Microsoft.Extensions.Configuration.IConfigurationSection GetSection(string key) => throw new NotImplementedException();
     }
 
+    private sealed class FakePaystack : IPaystackClient
+    {
+        public List<BankInfo> Banks { get; set; } = new()
+        {
+            new("Guaranty Trust Bank", "guaranty-trust-bank", "058"),
+            new("Access Bank", "access-bank", "044"),
+            new("Wema Bank", "wema-bank", "035")
+        };
+        public string? HolderName { get; set; } = "Musa Rider";
+        public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
+            string email, long amountKobo, Guid orderId, CancellationToken ct)
+            => Task.FromResult(("ref", "https://pay.test"));
+        public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct)
+            => Task.FromResult(true);
+        public Task<string?> CreateRecipientAsync(string accountNumber, string bankCode, string name, CancellationToken ct)
+            => Task.FromResult<string?>("RCP_TEST");
+        public Task<string?> InitiateTransferAsync(long amountKobo, string recipientCode, string reason, CancellationToken ct)
+            => Task.FromResult<string?>(null);
+        public Task<(bool Success, string? RefundReference, string? Error)> RefundTransactionAsync(string reference, CancellationToken ct)
+            => Task.FromResult((true, (string?)"RFND_TEST", (string?)null));
+        public Task<(bool Success, string? CustomerCode, string? Error)> CreateCustomerAsync(string email, string firstName, string lastName, string phone, Guid orderId, CancellationToken ct)
+            => Task.FromResult((true, (string?)"CUS_TEST", (string?)null));
+        public Task<(bool Success, string? AccountNumber, string? AccountName, string? Bank, string? Error)> AssignDedicatedAccountAsync(string customerCode, string? preferredBank, CancellationToken ct)
+            => Task.FromResult((true, (string?)"0123456789", (string?)"Ada Obi", (string?)"Wema", (string?)null));
+        public Task<List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
+            => Task.FromResult(new List<(string Name, string Slug, string Code)>());
+        public Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
+            => Task.FromResult(Banks.Select(b => (b.Name, b.Slug, b.Code)).ToList());
+        public Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
+            string accountNumber, string bankCode, CancellationToken ct)
+            => Task.FromResult(HolderName is null
+                ? (false, (string?)null, "bad account")
+                : (true, HolderName, (string?)null));
+    }
+
     private readonly FakeStates _states = new();
     private readonly FakeVendors _vendors = new();
     private readonly FakeOrders _orders = new();
     private readonly FakeParser _parser = new();
     private readonly FakeSender _sender = new();
     private readonly FakeMediator _mediator = new();
+    private readonly FakePaystack _paystack = new();
     private readonly ConversationRouter _router;
 
     public ConversationRouterTests()
     {
+        var banks = new BankDirectory(
+            _paystack, NullLogger<BankDirectory>.Instance);
         _router = new ConversationRouter(
             _states, _vendors, _orders, _parser, _sender, _mediator,
-            new PassThroughSanitizer(), new FakeConfig(), NullLogger<ConversationRouter>.Instance);
+            new PassThroughSanitizer(), new FakeConfig(), banks,
+            _paystack, NullLogger<ConversationRouter>.Instance);
     }
 
     private void SeedVendor(string phone) => _vendors.Vendors.Add(new Vendor
@@ -272,8 +312,12 @@ public class ConversationRouterTests
         await Send(phone, "08055556666");
         Assert.Equal(ConversationStep.DraftDriverAccount, State(phone).Step);
         await Send(phone, "0123456789");
-        Assert.Equal(ConversationStep.DraftDriverBank, State(phone).Step);
-        await Send(phone, "058");
+        Assert.Equal(ConversationStep.DraftDriverBankName, State(phone).Step);
+        await Send(phone, "GTBank");
+        Assert.Equal(ConversationStep.DraftDriverConfirm, State(phone).Step);
+        Assert.Contains("Guaranty Trust Bank", _sender.LastBody);
+        Assert.Contains("Musa Rider", _sender.LastBody);
+        await Send(phone, "YES");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
         var summary = _sender.LastBody.Replace(",", "");
         Assert.Contains("5000", summary);
@@ -336,7 +380,7 @@ public class ConversationRouterTests
     }
 
     [Fact]
-    public async Task StepByStep_BadBankCode_Reasks()
+    public async Task StepByStep_UnknownBank_Reasks()
     {
         const string phone = "08010000012";
         _parser.NextParsed = new ParsedOrder("", "", "",
@@ -358,11 +402,32 @@ public class ConversationRouterTests
         await Send(phone, "08055556666");
         Assert.Equal(ConversationStep.DraftDriverAccount, State(phone).Step);
         await Send(phone, "0123456789");
-        await Send(phone, "05");
-        Assert.Equal(ConversationStep.DraftDriverBank, State(phone).Step);
-        Assert.Contains("3 digits", _sender.LastBody);
-        await Send(phone, "058");
-        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+        await Send(phone, "Bank of Nowhere");
+        Assert.Equal(ConversationStep.DraftDriverBankName, State(phone).Step);
+        Assert.Contains("couldn't find that bank", _sender.LastBody);
+        await Send(phone, "GTB");
+        Assert.Equal(ConversationStep.DraftDriverConfirm, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task StepByStep_UnverifiableAccount_BackToAccount()
+    {
+        const string phone = "08010000014";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
+        _paystack.HolderName = null;
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "Lekki");
+        await Send(phone, "2x Sneakers @22500");
+        await Send(phone, "5000");
+        await Send(phone, "08055556666");
+        await Send(phone, "0123456789");
+        await Send(phone, "GTBank");
+        Assert.Equal(ConversationStep.DraftDriverAccount, State(phone).Step);
+        Assert.Contains("couldn't verify", _sender.LastBody);
     }
 
     [Fact]

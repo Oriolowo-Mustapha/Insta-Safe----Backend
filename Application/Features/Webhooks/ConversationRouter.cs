@@ -20,16 +20,20 @@ public class ConversationRouter
     private readonly IMediator _mediator;
     private readonly ISanitizer _sanitizer;
     private readonly IConfiguration _config;
+    private readonly BankDirectory _banks;
+    private readonly IPaystackClient _paystack;
     private readonly ILogger<ConversationRouter> _logger;
 
     public ConversationRouter(
         IConversationRepository states, IVendorRepository vendors, IOrderRepository orders,
         IGroqParser parser, IWhatsAppSender sender, IMediator mediator,
-        ISanitizer sanitizer, IConfiguration config, ILogger<ConversationRouter> logger)
+        ISanitizer sanitizer, IConfiguration config, BankDirectory banks,
+        IPaystackClient paystack, ILogger<ConversationRouter> logger)
     {
         _states = states; _vendors = vendors; _orders = orders;
         _parser = parser; _sender = sender; _mediator = mediator;
-        _sanitizer = sanitizer; _config = config; _logger = logger;
+        _sanitizer = sanitizer; _config = config; _banks = banks;
+        _paystack = paystack; _logger = logger;
     }
 
     public async Task<bool> RouteAsync(string rawPhone, string body, string? replyJid, CancellationToken ct)
@@ -127,8 +131,11 @@ public class ConversationRouter
             case Domain.Entities.ConversationStep.DraftDriverAccount:
                 await HandleDriverAccountStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
-            case Domain.Entities.ConversationStep.DraftDriverBank:
-                await HandleDriverBankStepAsync(state, phone, replyTo, text, draft, ct);
+            case Domain.Entities.ConversationStep.DraftDriverBankName:
+                await HandleDriverBankNameStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDriverConfirm:
+                await HandleDriverConfirmStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.Confirming:
                 await HandleConfirmStepAsync(state, phone, replyTo, text, draft, ct);
@@ -390,24 +397,77 @@ public class ConversationRouter
             return;
         }
         draft = draft with { DriverAccountNumber = _sanitizer.Clean(digits, 20) };
-        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverBank,
-            Domain.Entities.ConversationStep.DraftDriverBank, ct, draft);
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverBankName,
+            Domain.Entities.ConversationStep.DraftDriverBankName, ct, draft);
     }
 
-    private async Task HandleDriverBankStepAsync(
+    private async Task HandleDriverBankNameStepAsync(
         Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
     {
-        var digits = new string(text.Where(char.IsDigit).ToArray());
-        if (digits.Length != 3)
+        BankInfo? bank;
+        try
+        {
+            var banks = await _banks.GetBanksAsync(ct);
+            bank = BankDirectory.Match(text, banks);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Bank match failed");
+            bank = null;
+        }
+
+        if (bank is null)
         {
             await ReplyAndSaveAsync(state, phone, replyTo,
-                "Bank code should be 3 digits (e.g. 058 for GTB). Please resend it.",
+                "I couldn't find that bank. Send the full bank name (e.g. Guaranty Trust Bank) or its 3-digit code.",
                 state.Step, ct);
             return;
         }
-        draft = draft with { DriverBankCode = digits };
-        await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
-            Domain.Entities.ConversationStep.Confirming, ct, draft);
+
+        string? holder;
+        try
+        {
+            var (ok, name, _) = await _paystack.ResolveAccountAsync(draft.DriverAccountNumber, bank.Code, ct);
+            holder = ok ? name : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Driver account resolve failed");
+            holder = null;
+        }
+
+        if (string.IsNullOrWhiteSpace(holder))
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                $"I couldn't verify account {draft.DriverAccountNumber} at {bank.Name}. " +
+                "Please resend the driver account number, or CANCEL to stop.",
+                Domain.Entities.ConversationStep.DraftDriverAccount, ct,
+                draft with { DriverBankCode = "", DriverBankName = "" });
+            return;
+        }
+
+        draft = draft with { DriverBankCode = bank.Code, DriverBankName = bank.Name, DriverHolderName = holder };
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            ConversationTexts.DriverDetailsConfirm(bank.Name, draft.DriverAccountNumber, holder),
+            Domain.Entities.ConversationStep.DraftDriverConfirm, ct, draft);
+    }
+
+    private async Task HandleDriverConfirmStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var upper = text.ToUpperInvariant();
+        if (upper is "YES" or "Y" or "CONFIRM")
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            return;
+        }
+
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            ConversationTexts.DriverDetailsConfirm(
+                draft.DriverBankName, draft.DriverAccountNumber, draft.DriverHolderName) +
+                "\n(Reply YES to use these details, or CANCEL to stop)",
+            state.Step, ct);
     }
 
     private async Task HandleConfirmStepAsync(
@@ -565,7 +625,7 @@ public class ConversationRouter
         ConversationTexts.ConfirmSummary(
             draft.CustomerName, draft.CustomerPhone, draft.Address,
             draft.ItemsSummary(), draft.TotalNgn,
-            draft.DeliveryFeeNgn, draft.DriverPhone);
+            draft.DeliveryFeeNgn, draft.DriverPhone, draft.DriverBankName);
 
     private static Domain.Entities.ConversationStep FirstMissingStep(OrderDraft draft)
     {
@@ -578,7 +638,7 @@ public class ConversationRouter
         {
             if (string.IsNullOrWhiteSpace(draft.DriverPhone)) return Domain.Entities.ConversationStep.DraftDriverPhone;
             if (string.IsNullOrWhiteSpace(draft.DriverAccountNumber)) return Domain.Entities.ConversationStep.DraftDriverAccount;
-            if (string.IsNullOrWhiteSpace(draft.DriverBankCode)) return Domain.Entities.ConversationStep.DraftDriverBank;
+            if (string.IsNullOrWhiteSpace(draft.DriverBankCode)) return Domain.Entities.ConversationStep.DraftDriverBankName;
         }
         return Domain.Entities.ConversationStep.DraftDeliveryFee;
     }
@@ -593,7 +653,7 @@ public class ConversationRouter
         Domain.Entities.ConversationStep.DraftDeliveryFee => ConversationTexts.AskDeliveryFee,
         Domain.Entities.ConversationStep.DraftDriverPhone => ConversationTexts.AskDriverPhone,
         Domain.Entities.ConversationStep.DraftDriverAccount => ConversationTexts.AskDriverAccount,
-        Domain.Entities.ConversationStep.DraftDriverBank => ConversationTexts.AskDriverBank,
+        Domain.Entities.ConversationStep.DraftDriverBankName => ConversationTexts.AskDriverBankName,
         _ => ConversationTexts.Menu
     };
 }

@@ -26,7 +26,12 @@ public static class ConversationTexts
     public const string AskDriverPhone =
         "What is the driver's phone number? (e.g. 08055556666 — or send SKIP if you deliver yourself)";
     public const string AskDriverAccount = "What is the driver's account number? (10 digits)";
-    public const string AskDriverBank = "What is the driver's bank code? (e.g. 058 for GTB — ask your bank if unsure)";
+    public const string AskDriverBankName = "Which bank? Send the bank name, e.g. GTBank, Access, Zenith.";
+
+    public static string DriverDetailsConfirm(string bankName, string accountNumber, string holderName) =>
+        $"Please confirm the driver payout details:\n" +
+        $"Bank: {bankName}\nAccount: {accountNumber}\nName: {holderName}\n" +
+        "Reply YES if this is correct, or CANCEL to stop.";
 
     public const string AskTrackRef = "Please send your order reference (from your payment link or receipt). Type MENU to go back.";
 
@@ -56,10 +61,12 @@ public static class ConversationTexts
 
     public static string ConfirmSummary(
         string customerName, string customerPhone, string address, string itemsLines,
-        long totalNgn, long deliveryFeeNgn, string driverPhone)
+        long totalNgn, long deliveryFeeNgn, string driverPhone, string driverBank = "")
     {
         var feeLine = deliveryFeeNgn > 0 ? $"\nDelivery fee: ₦{deliveryFeeNgn:N0}" : "";
-        var driverLine = !string.IsNullOrWhiteSpace(driverPhone) ? $"\nDriver: {driverPhone}" : "";
+        var driverLine = !string.IsNullOrWhiteSpace(driverPhone)
+            ? $"\nDriver: {driverPhone}" + (string.IsNullOrWhiteSpace(driverBank) ? "" : $" ({driverBank})")
+            : "";
         return "Please confirm your order:\n" +
             $"Customer: {customerName} ({customerPhone})\n" +
             $"Address: {address}\n" +
