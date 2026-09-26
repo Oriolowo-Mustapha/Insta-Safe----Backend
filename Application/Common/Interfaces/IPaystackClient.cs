@@ -13,6 +13,7 @@ public interface IPaystackClient
     Task<(bool Success, string? AccountNumber, string? AccountName, string? Bank, string? Error)> AssignDedicatedAccountAsync(
         string customerCode, string? preferredBank, CancellationToken ct);
     Task<List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct);
+    Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct);
     Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
         string accountNumber, string bankCode, CancellationToken ct);
 }

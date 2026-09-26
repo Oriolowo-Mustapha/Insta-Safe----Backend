@@ -135,7 +135,7 @@ All vendor JWT, own id only (else `403`):
 ### Bank-transfer rail (dedicated virtual account)
 - `POST /api/orders/{id}/request-bank-transfer` (vendor JWT, own order) `{ "preferredBank": "wema-bank" }` (optional; omit for default). Idempotent — repeat calls return the same account. Only from `AwaitingPayment`/`Draft`.
 - Returns `payVirtualAccountNumber/Bank/Name`. Buyer transfers the **exact** total; confirmation is automatic via webhook.
-- `GET /api/payments/banks` **(Public)** → `[{ name, slug, code }]` for dropdowns and valid `preferredBank` slugs.
+- `GET /api/payments/banks` **(Public)** → full Nigerian bank list `[{ name, slug, code }]` for dropdowns and valid `preferredBank` slugs. Add `?transferOnly=true` for the short DVA-receivable subset.
 - `GET /api/payments/banks/resolve?accountNumber=...&bankCode=...` **(Public)** → `{ accountNumber, bankCode, accountName }`. Wrong details → `400` with a friendly message. Compare `accountName` with the typed name client-side before saving payout info.
 
 ### Vendor order views (JWT, own orders only)

@@ -86,4 +86,65 @@ public class PaystackResolveTests
 
         Assert.Empty(banks);
     }
+
+    private sealed class QueueHandler : HttpMessageHandler
+    {
+        private readonly Queue<(HttpStatusCode, string)> _responses;
+        public int Calls { get; private set; }
+        public QueueHandler(IEnumerable<(HttpStatusCode, string)> responses)
+            => _responses = new Queue<(HttpStatusCode, string)>(responses);
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct)
+        {
+            Calls++;
+            var (status, json) = _responses.Dequeue();
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private static (PaystackClient Client, QueueHandler Handler) Paged(
+        params (HttpStatusCode, string)[] responses)
+    {
+        var handler = new QueueHandler(responses);
+        return (new PaystackClient(new HttpClient(handler),
+            new FakeConfig(), NullLogger<PaystackClient>.Instance), handler);
+    }
+
+    private static string BankPage(params (string Name, string Slug, string Code)[] banks) =>
+        """{"status":true,"data":[""" +
+        string.Join(",", banks.Select(b =>
+            $$"""{"name":"{{b.Name}}","slug":"{{b.Slug}}","code":"{{b.Code}}"}""")) +
+        "]}";
+
+    [Fact]
+    public async Task ListAllBanks_StopsAfterShortPage()
+    {
+        var (client, handler) = Paged((HttpStatusCode.OK, BankPage(
+            ("Abbey Mortgage Bank", "abbey-mortgage-bank", "801"),
+            ("Coronation Merchant Bank", "coronation-merchant-bank", "559"))));
+
+        var banks = await client.ListAllBanksAsync(CancellationToken.None);
+
+        Assert.Equal(2, banks.Count);
+        Assert.Equal("801", banks[0].Code);
+        Assert.Equal(1, handler.Calls);
+    }
+
+    [Fact]
+    public async Task ListAllBanks_PagesUntilShortPage()
+    {
+        var full = string.Join(",", Enumerable.Range(1, 100).Select(i =>
+            $$"""{"name":"Bank {{i}}","slug":"bank-{{i}}","code":"{{i:000}}"}"""));
+        var (client, handler) = Paged(
+            (HttpStatusCode.OK, """{"status":true,"data":[""" + full + "]}"),
+            (HttpStatusCode.OK, BankPage(("Last Bank", "last-bank", "999"))));
+
+        var banks = await client.ListAllBanksAsync(CancellationToken.None);
+
+        Assert.Equal(101, banks.Count);
+        Assert.Equal(2, handler.Calls);
+    }
 }

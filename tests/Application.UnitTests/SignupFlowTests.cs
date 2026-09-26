@@ -60,6 +60,8 @@ public class SignupFlowTests
         public Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
             string accountNumber, string bankCode, CancellationToken ct)
             => Task.FromResult((true, (string?)"Ada Obi", (string?)null));
+        public Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
+            => Task.FromResult(new List<(string Name, string Slug, string Code)>());
     }
 
     private sealed class PassSanitizer : ISanitizer

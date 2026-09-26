@@ -13,14 +13,18 @@ public class PaymentsController : ControllerBase
     public PaymentsController(IPaystackClient paystack) => _paystack = paystack;
 
     /// <summary>
-    /// Transfer-capable banks (name/slug/code) for dropdowns and DVA preferred_bank.
+    /// Nigerian banks for dropdowns. Full list by default;
+    /// transferOnly=true narrows to DVA-receivable banks (for preferred_bank).
     /// Public: needed on signup/onboarding screens before login.
     /// </summary>
     [HttpGet("banks")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<List<BankDto>>>> Banks(CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<List<BankDto>>>> Banks(
+        [FromQuery] bool transferOnly = false, CancellationToken ct = default)
     {
-        var banks = await _paystack.ListTransferBanksAsync(ct);
+        var banks = transferOnly
+            ? await _paystack.ListTransferBanksAsync(ct)
+            : await _paystack.ListAllBanksAsync(ct);
         return Ok(ApiResponse<List<BankDto>>.SuccessResponse(
             banks.Select(b => new BankDto(b.Name, b.Slug, b.Code)).ToList()));
     }

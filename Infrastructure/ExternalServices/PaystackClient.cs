@@ -177,6 +177,37 @@ public class PaystackClient : IPaystackClient
         }
     }
 
+    public async Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
+    {
+        // Full Nigerian bank list (payout dropdowns). Pages through Paystack's
+        // 100-per-page cap; stops at the first short page.
+        var all = new List<(string Name, string Slug, string Code)>();
+        for (var page = 1; page <= 5; page++)
+        {
+            var res = await _http.GetAsync($"/bank?country=nigeria&perPage=100&page={page}", ct);
+            if (!res.IsSuccessStatusCode) break;
+            List<(string Name, string Slug, string Code)> batch;
+            try
+            {
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+                batch = doc.RootElement.GetProperty("data").EnumerateArray()
+                    .Select(b => (
+                        Name: b.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                        Slug: b.TryGetProperty("slug", out var s) ? s.GetString() ?? "" : "",
+                        Code: b.TryGetProperty("code", out var c) ? c.GetString() ?? "" : ""))
+                    .Where(b => !string.IsNullOrEmpty(b.Name))
+                    .ToList();
+            }
+            catch
+            {
+                break;
+            }
+            all.AddRange(batch);
+            if (batch.Count < 100) break;
+        }
+        return all;
+    }
+
     public async Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
         string accountNumber, string bankCode, CancellationToken ct)
     {
