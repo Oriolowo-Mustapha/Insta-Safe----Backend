@@ -154,7 +154,7 @@ public class RegisterVendorHandlerTests
     public async Task Register_DuplicatePhone_Fails()
     {
         var repo = new FakeVendorRepository();
-        repo.Vendors.Add(new Vendor { Phone = "08012345678", DisplayName = "Existing" });
+        repo.Vendors.Add(new Vendor { Phone = "2348012345678", DisplayName = "Existing" });
         var (handler, _) = CreateHandler(repo);
 
         var result = await handler.Handle(Signup(), CancellationToken.None);
@@ -168,7 +168,7 @@ public class RegisterVendorHandlerTests
     public async Task Register_DuplicateEmail_Fails()
     {
         var repo = new FakeVendorRepository();
-        repo.Vendors.Add(new Vendor { Phone = "08099999999", DisplayName = "Existing", Email = "ada@example.com" });
+        repo.Vendors.Add(new Vendor { Phone = "2348099999999", DisplayName = "Existing", Email = "ada@example.com" });
         var (handler, _) = CreateHandler(repo);
 
         var result = await handler.Handle(Signup(), CancellationToken.None);

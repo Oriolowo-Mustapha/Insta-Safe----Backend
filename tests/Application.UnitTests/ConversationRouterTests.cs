@@ -165,7 +165,8 @@ public class ConversationRouterTests
         return _router.RouteAsync(phone, text, null, CancellationToken.None);
     }
 
-    private ConversationState State(string phone) => _states.Store[phone];
+    private ConversationState State(string phone) =>
+        _states.Store[InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone)];
 
     [Fact]
     public async Task Greeting_ShowsWelcomeAndMenu()
@@ -239,7 +240,8 @@ public class ConversationRouterTests
 
         Assert.Contains("Payment link", _sender.LastBody);
         Assert.Equal(ConversationStep.Idle, State(phone).Step);
-        Assert.Contains(_vendors.Vendors, v => v.Phone == phone);
+        Assert.Contains(_vendors.Vendors, v =>
+            v.Phone == InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone));
     }
 
     [Fact]
@@ -281,7 +283,7 @@ public class ConversationRouterTests
 
         Assert.NotNull(captured);
         Assert.Equal(5000, captured!.DeliveryFeeNgn);
-        Assert.Equal("08055556666", captured.DriverPhone);
+        Assert.Equal("2348055556666", captured.DriverPhone);
         Assert.Equal("0123456789", captured.DriverAccountNumber);
         Assert.Equal("058", captured.DriverBankCode);
         Assert.Contains("Payment link", _sender.LastBody);
@@ -423,7 +425,7 @@ public class ConversationRouterTests
     {
         _vendors.Vendors.Add(new Vendor
         {
-            Phone = "08019990002",
+            Phone = "2348019990002",
             DisplayName = "Unverified",
             EmailVerified = false,
             OnboardingCompleted = false
@@ -439,7 +441,7 @@ public class ConversationRouterTests
     {
         _vendors.Vendors.Add(new Vendor
         {
-            Phone = "08019990003",
+            Phone = "2348019990003",
             DisplayName = "Gone",
             EmailVerified = true,
             OnboardingCompleted = true,
@@ -456,7 +458,7 @@ public class ConversationRouterTests
     {
         _vendors.Vendors.Add(new Vendor
         {
-            Phone = "08019990004",
+            Phone = "2348019990004",
             DisplayName = "NoBank",
             EmailVerified = true,
             OnboardingCompleted = false

@@ -40,6 +40,26 @@ public class VendorValidatorTests
         Assert.False(validator.Validate(Full() with { Password = "short" }).IsValid);
     }
 
+    [Theory]
+    [InlineData("0701602720")]
+    [InlineData("12345")]
+    [InlineData("+1 415 555 2671")]
+    public void RegisterVendor_RejectsNonNigerianPhone(string phone)
+    {
+        var validator = new RegisterVendorCommandValidator();
+        Assert.False(validator.Validate(Full(phone)).IsValid);
+    }
+
+    [Theory]
+    [InlineData("08031234567")]
+    [InlineData("+2348031234567")]
+    [InlineData("2348031234567")]
+    public void RegisterVendor_AcceptsNigerianFormats(string phone)
+    {
+        var validator = new RegisterVendorCommandValidator();
+        Assert.True(validator.Validate(Full(phone)).IsValid);
+    }
+
     [Fact]
     public void UpdatePayout_RequiresAccountAndBank()
     {
@@ -59,7 +79,10 @@ public class VendorValidatorTests
     [Theory]
     [InlineData("+234 801 234 5678", "2348012345678")]
     [InlineData("2348012345678@c.us", "2348012345678")]
-    [InlineData("0801-234-5678", "08012345678")]
+    [InlineData("0801-234-5678", "2348012345678")]
+    [InlineData("08031234567", "2348031234567")]
+    [InlineData("2348031234567", "2348031234567")]
+    [InlineData("+1 415 555 2671", "14155552671")]
     public void PhoneNormalizer_StripsFormattingAndJidSuffix(string raw, string expected)
     {
         Assert.Equal(expected, PhoneNormalizer.Normalize(raw));
