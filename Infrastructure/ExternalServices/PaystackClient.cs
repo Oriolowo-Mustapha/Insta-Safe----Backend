@@ -176,4 +176,30 @@ public class PaystackClient : IPaystackClient
             return new();
         }
     }
+
+    public async Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
+        string accountNumber, string bankCode, CancellationToken ct)
+    {
+        var res = await _http.GetAsync(
+            $"/bank/resolve?account_number={Uri.EscapeDataString(accountNumber)}&bank_code={Uri.EscapeDataString(bankCode)}", ct);
+        var raw = await res.Content.ReadAsStringAsync(ct);
+        if (!res.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Account resolve failed: {Status} {Body}", res.StatusCode, raw);
+            return (false, null, "Could not verify this account. Check the number and bank, then retry.");
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var name = doc.RootElement.GetProperty("data").GetProperty("account_name").GetString();
+            if (string.IsNullOrWhiteSpace(name))
+                return (false, null, "No account name returned. Check the number and bank, then retry.");
+            return (true, name, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Account resolve response unparseable");
+            return (false, null, "Account verification unreadable. Try again.");
+        }
+    }
 }

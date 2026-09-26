@@ -33,11 +33,11 @@ public class VendorValidatorTests
     }
 
     [Fact]
-    public void RegisterVendor_BankPairRequiresBothParts()
+    public void RegisterVendor_RejectsBadEmailAndShortPassword()
     {
         var validator = new RegisterVendorCommandValidator();
-        var cmd = Full() with { AccountNumber = "0123456789", BankCode = null };
-        Assert.False(validator.Validate(cmd).IsValid);
+        Assert.False(validator.Validate(Full() with { Email = "not-an-email" }).IsValid);
+        Assert.False(validator.Validate(Full() with { Password = "short" }).IsValid);
     }
 
     [Fact]

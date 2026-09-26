@@ -13,7 +13,6 @@ namespace InstaSafe.Application.Features.Vendors.Commands.RegisterVendor;
 public class RegisterVendorCommandHandler : IRequestHandler<RegisterVendorCommand, Result<VendorDto>>
 {
     private readonly IVendorRepository _vendors;
-    private readonly IPaystackClient _paystack;
     private readonly ISanitizer _sanitizer;
     private readonly IPasswordHasher _passwords;
     private readonly IOtpService _otp;
@@ -23,11 +22,11 @@ public class RegisterVendorCommandHandler : IRequestHandler<RegisterVendorComman
     private readonly IMapper _mapper;
 
     public RegisterVendorCommandHandler(
-        IVendorRepository vendors, IPaystackClient paystack, ISanitizer sanitizer,
+        IVendorRepository vendors, ISanitizer sanitizer,
         IPasswordHasher passwords, IOtpService otp, IEmailSender email,
         IConfiguration config, ILogger<RegisterVendorCommandHandler> logger, IMapper mapper)
     {
-        _vendors = vendors; _paystack = paystack; _sanitizer = sanitizer;
+        _vendors = vendors; _sanitizer = sanitizer;
         _passwords = passwords; _otp = otp; _email = email;
         _config = config; _logger = logger; _mapper = mapper;
     }
@@ -53,20 +52,10 @@ public class RegisterVendorCommandHandler : IRequestHandler<RegisterVendorComman
             LastName = _sanitizer.Clean(req.LastName, 120),
             Email = _sanitizer.Clean(email, 200),
             PasswordHash = _passwords.Hash(req.Password),
-            AccountNumber = req.AccountNumber is null ? null : _sanitizer.Clean(req.AccountNumber, 20),
-            BankCode = req.BankCode is null ? null : _sanitizer.Clean(req.BankCode, 10),
             IsActive = true,
             EmailVerified = false,
             OnboardingCompleted = false
         };
-
-        if (vendor.AccountNumber is not null && vendor.BankCode is not null)
-        {
-            var recipient = await _paystack.CreateRecipientAsync(
-                vendor.AccountNumber, vendor.BankCode, vendor.DisplayName, ct);
-            if (recipient is not null) vendor.PaystackRecipientCode = recipient;
-            vendor.OnboardingCompleted = true;
-        }
 
         var code = _otp.GenerateOtp();
         var salt = _otp.NewSalt();

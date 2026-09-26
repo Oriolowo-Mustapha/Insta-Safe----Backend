@@ -52,14 +52,12 @@ Order creation takes **naira** (`amountNgn`, `deliveryFeeNgn`). Buyer is charged
   "firstName": "Ada",
   "lastName": "Obi",
   "email": "ada@example.com",
-  "password": "s3cretPass!",
-  "accountNumber": "0123456789",
-  "bankCode": "058"
+  "password": "s3cretPass!"
 }
 ```
-- `phone/displayName/firstName/lastName/email/password` required (password min 8). `accountNumber + bankCode` optional here.
+- Profile + password only — **no bank details here**. Payout setup happens after email verification (step 2).
 - Duplicate phone or email → `400 "already exists"`.
-- Sends a 6-digit code to the email. Returns the vendor with `emailVerified: false`.
+- Sends a 6-digit code to the email. Returns the vendor with `emailVerified: false`, `onboardingCompleted: false`.
 - If bank pair supplied, payout recipient is created immediately and `onboardingCompleted: true`.
 
 ### Step 1b — Resend email code
@@ -73,7 +71,7 @@ Code: 10-min expiry, 5-attempt lock. Returns vendor with `emailVerified: true`.
 ### Step 2 — Payout setup (finishes onboarding)
 `PUT /api/vendors/{id}/payout` (vendor JWT, own id)
 `{ "accountNumber": "0123456789", "bankCode": "058" }` → creates Paystack recipient, sets `onboardingCompleted: true`.
-Get bank codes from `GET /api/payments/banks` (vendor JWT).
+Build the form as: bank dropdown (`GET /api/payments/banks`, public) → account number input → **live verify** (`GET /api/payments/banks/resolve?accountNumber=...&bankCode=...`, public) → show returned `accountName` and ask the vendor to confirm it matches their name → only then `PUT payout`.
 
 ### Recommended frontend gating
 Read `vendor.emailVerified` / `vendor.onboardingCompleted` from any vendor response:
@@ -137,7 +135,8 @@ All vendor JWT, own id only (else `403`):
 ### Bank-transfer rail (dedicated virtual account)
 - `POST /api/orders/{id}/request-bank-transfer` (vendor JWT, own order) `{ "preferredBank": "wema-bank" }` (optional; omit for default). Idempotent — repeat calls return the same account. Only from `AwaitingPayment`/`Draft`.
 - Returns `payVirtualAccountNumber/Bank/Name`. Buyer transfers the **exact** total; confirmation is automatic via webhook.
-- `GET /api/payments/banks` (vendor JWT) → `[{ name, slug, code }]` for dropdowns and valid `preferredBank` slugs.
+- `GET /api/payments/banks` **(Public)** → `[{ name, slug, code }]` for dropdowns and valid `preferredBank` slugs.
+- `GET /api/payments/banks/resolve?accountNumber=...&bankCode=...` **(Public)** → `{ accountNumber, bankCode, accountName }`. Wrong details → `400` with a friendly message. Compare `accountName` with the typed name client-side before saving payout info.
 
 ### Vendor order views (JWT, own orders only)
 - `GET /api/orders?page=&pageSize=` — my orders, newest first

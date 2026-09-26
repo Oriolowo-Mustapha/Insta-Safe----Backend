@@ -57,6 +57,9 @@ public class SignupFlowTests
             => Task.FromResult((true, (string?)"0123456789", (string?)"Ada Obi", (string?)"Wema", (string?)null));
         public Task<List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
             => Task.FromResult(new List<(string Name, string Slug, string Code)>());
+        public Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
+            string accountNumber, string bankCode, CancellationToken ct)
+            => Task.FromResult((true, (string?)"Ada Obi", (string?)null));
     }
 
     private sealed class PassSanitizer : ISanitizer
@@ -105,7 +108,7 @@ public class SignupFlowTests
     private async Task<InstaSafe.Application.Common.Models.Result<InstaSafe.Application.Features.Vendors.DTOs.VendorDto>> Signup()
     {
         var handler = new RegisterVendorCommandHandler(
-            _vendors, new FakePaystack(), new PassSanitizer(), new PasswordHasher(),
+            _vendors, new PassSanitizer(), new PasswordHasher(),
             new FakeOtp(), _email, new FakeConfig(),
             NullLogger<RegisterVendorCommandHandler>.Instance, _mapper);
         return await handler.Handle(

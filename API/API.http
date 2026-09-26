@@ -150,10 +150,15 @@ Authorization: Bearer YOUR_JWT_HERE
 
 ###
 
-### Transfer-capable banks (vendor JWT)
+### Transfer-capable banks (public — for dropdowns)
 GET {{InstaSafe_HostAddress}}/api/payments/banks
 Accept: application/json
-Authorization: Bearer YOUR_JWT_HERE
+
+###
+
+### Resolve account name (public — confirm holder before saving payout)
+GET {{InstaSafe_HostAddress}}/api/payments/banks/resolve?accountNumber=0123456789&bankCode=058
+Accept: application/json
 
 ###
 

@@ -63,6 +63,9 @@ public class RegisterVendorHandlerTests
             => Task.FromResult((true, (string?)"0123456789", (string?)"Ada Obi", (string?)"Wema", (string?)null));
         public Task<List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
             => Task.FromResult(new List<(string Name, string Slug, string Code)>());
+        public Task<(bool Success, string? AccountName, string? Error)> ResolveAccountAsync(
+            string accountNumber, string bankCode, CancellationToken ct)
+            => Task.FromResult((true, (string?)"Ada Obi", (string?)null));
     }
 
     private sealed class PassThroughSanitizer : ISanitizer
@@ -108,14 +111,14 @@ public class RegisterVendorHandlerTests
     }
 
     private static (RegisterVendorCommandHandler Handler, HandlerDeps Deps) CreateHandler(
-        FakeVendorRepository repo, FakePaystack paystack)
+        FakeVendorRepository repo)
     {
         var config = new MapperConfiguration(
             cfg => cfg.AddProfile<VendorMappingProfile>(),
             NullLoggerFactory.Instance);
         var deps = new HandlerDeps();
         var handler = new RegisterVendorCommandHandler(
-            repo, paystack, new PassThroughSanitizer(), new FakePasswords(),
+            repo, new PassThroughSanitizer(), new FakePasswords(),
             new FakeOtp(), deps.Email, new FakeConfig(),
             NullLogger<RegisterVendorCommandHandler>.Instance, config.CreateMapper());
         return (handler, deps);
@@ -125,26 +128,23 @@ public class RegisterVendorHandlerTests
         new(phone, "Ada Boutique", "Ada", "Obi", "ada@example.com", "s3cretPass!");
 
     [Fact]
-    public async Task Register_NewVendor_Succeeds_AndStoresRecipient()
+    public async Task Register_NewVendor_Succeeds_Unverified_AndOnboardingOpen()
     {
         var repo = new FakeVendorRepository();
-        var paystack = new FakePaystack();
-        var (handler, deps) = CreateHandler(repo, paystack);
+        var (handler, deps) = CreateHandler(repo);
 
-        var result = await handler.Handle(
-            Signup() with { AccountNumber = "0123456789", BankCode = "058" },
-            CancellationToken.None);
+        var result = await handler.Handle(Signup(), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Equal("Ada Boutique", result.Value!.DisplayName);
-        Assert.Equal("RCP_TEST", result.Value.PaystackRecipientCode);
         Assert.True(result.Value.IsActive);
         Assert.False(result.Value.EmailVerified);
-        Assert.True(result.Value.OnboardingCompleted);
+        Assert.False(result.Value.OnboardingCompleted);
+        Assert.Null(result.Value.PaystackRecipientCode);
         Assert.NotNull(repo.Vendors[0].PasswordHash);
+        Assert.NotEqual("s3cretPass!", repo.Vendors[0].PasswordHash);
         Assert.NotNull(repo.Vendors[0].EmailOtpHash);
         Assert.Single(repo.Vendors);
-        Assert.Equal("Ada Boutique", paystack.LastRecipientName);
         Assert.Single(deps.Email.Sent);
     }
 
@@ -153,7 +153,7 @@ public class RegisterVendorHandlerTests
     {
         var repo = new FakeVendorRepository();
         repo.Vendors.Add(new Vendor { Phone = "08012345678", DisplayName = "Existing" });
-        var (handler, _) = CreateHandler(repo, new FakePaystack());
+        var (handler, _) = CreateHandler(repo);
 
         var result = await handler.Handle(Signup(), CancellationToken.None);
 
@@ -167,7 +167,7 @@ public class RegisterVendorHandlerTests
     {
         var repo = new FakeVendorRepository();
         repo.Vendors.Add(new Vendor { Phone = "08099999999", DisplayName = "Existing", Email = "ada@example.com" });
-        var (handler, _) = CreateHandler(repo, new FakePaystack());
+        var (handler, _) = CreateHandler(repo);
 
         var result = await handler.Handle(Signup(), CancellationToken.None);
 
@@ -181,7 +181,7 @@ public class RegisterVendorHandlerTests
     {
         var repo = new FakeVendorRepository();
         repo.Vendors.Add(new Vendor { Phone = "2348012345678", DisplayName = "Existing" });
-        var (handler, _) = CreateHandler(repo, new FakePaystack());
+        var (handler, _) = CreateHandler(repo);
 
         var result = await handler.Handle(
             Signup("+234 801 234 5678"),
@@ -192,17 +192,15 @@ public class RegisterVendorHandlerTests
     }
 
     [Fact]
-    public async Task Register_WithoutBank_DoesNotCreateRecipient_AndLeavesOnboardingOpen()
+    public async Task Register_LeavesOnboardingOpen_ForPayoutStep()
     {
         var repo = new FakeVendorRepository();
-        var paystack = new FakePaystack();
-        var (handler, _) = CreateHandler(repo, paystack);
+        var (handler, _) = CreateHandler(repo);
 
         var result = await handler.Handle(Signup(), CancellationToken.None);
 
         Assert.True(result.IsSuccess);
         Assert.Null(result.Value!.PaystackRecipientCode);
         Assert.False(result.Value.OnboardingCompleted);
-        Assert.Null(paystack.LastRecipientName);
     }
 }
