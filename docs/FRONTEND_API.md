@@ -35,6 +35,9 @@ Authorization: Bearer <jwt>
 All amounts in DTOs are **kobo** (`amountKobo`, `deliveryFeeKobo`). Display naira = value / 100.
 Order creation takes **naira** (`amountNgn`, `deliveryFeeNgn`). Buyer is charged `amountNgn + deliveryFeeNgn`.
 
+### Phone numbers
+Nigerian mobiles, canonical `234...` form everywhere. The API normalizes `080...`/`+234...`/`234...` automatically, but **validate client-side**: 11 digits starting `070/080/081/090/091` (or `234` + 10 digits). Anything else → `400 "must be a valid Nigerian mobile number"`. Store and display the `234...` form the API returns.
+
 ### OrderStatus
 `Draft | AwaitingPayment | Held | Delivered | Released | Refunded | Disputed | Cancelled`
 (New: `Delivered = 7`, funds frozen in 24h inspection window.)
@@ -56,9 +59,8 @@ Order creation takes **naira** (`amountNgn`, `deliveryFeeNgn`). Buyer is charged
 }
 ```
 - Profile + password only — **no bank details here**. Payout setup happens after email verification (step 2).
-- Duplicate phone or email → `400 "already exists"`.
+- Duplicate phone or email → `400 "already exists"`. Malformed phone → `400` (Nigerian mobile rule above).
 - Sends a 6-digit code to the email. Returns the vendor with `emailVerified: false`, `onboardingCompleted: false`.
-- If bank pair supplied, payout recipient is created immediately and `onboardingCompleted: true`.
 
 ### Step 1b — Resend email code
 `POST /api/auth/vendor/request-email-code` **(Public)** `{ "email": "..." }`
@@ -101,6 +103,7 @@ All vendor JWT, own id only (else `403`):
 - `GET /api/vendors/by-phone?phone=...` — lookup (must be own phone)
 - `GET /api/vendors` — returns `[self]` (no directory listing by design)
 - `PUT /api/vendors/{id}` `{ "displayName": "..." }` — rename business
+- `PUT /api/vendors/{id}/phone` `{ "phone": "07031602720" }` — correct a mistyped number (normalized, uniqueness-checked, same Nigerian rule). **Forces re-login** (JWT holds the old number) — route to login after.
 - `POST /api/vendors/{id}/deactivate` / `.../reactivate`
 
 `VendorDto`: `id, phone, displayName, firstName, lastName, email, accountNumber, bankCode, paystackRecipientCode, isActive, emailVerified, onboardingCompleted, createdAt, updatedAt`.
@@ -136,7 +139,7 @@ All vendor JWT, own id only (else `403`):
 - `POST /api/orders/{id}/request-bank-transfer` (vendor JWT, own order) `{ "preferredBank": "wema-bank" }` (optional; omit for default). Idempotent — repeat calls return the same account. Only from `AwaitingPayment`/`Draft`.
 - Returns `payVirtualAccountNumber/Bank/Name`. Buyer transfers the **exact** total; confirmation is automatic via webhook.
 - `GET /api/payments/banks` **(Public)** → full Nigerian bank list `[{ name, slug, code }]` for dropdowns and valid `preferredBank` slugs. Add `?transferOnly=true` for the short DVA-receivable subset.
-- `GET /api/payments/banks/resolve?accountNumber=...&bankCode=...` **(Public)** → `{ accountNumber, bankCode, accountName }`. Wrong details → `400` with a friendly message. Compare `accountName` with the typed name client-side before saving payout info.
+- `GET /api/payments/banks/resolve?accountNumber=...&bankCode=...` **(Public)** → `{ accountNumber, bankCode, accountName }`. Wrong details → `400` with Paystack's reason included. Service down/rate-limited → **`503`** — show "couldn't verify, proceed carefully" instead of "wrong account". (Note: Paystack test mode allows ~3 live resolves/day; use code `001` or live keys for volume testing.)
 
 ### Vendor order views (JWT, own orders only)
 - `GET /api/orders?page=&pageSize=` — my orders, newest first
@@ -156,7 +159,7 @@ These power the track page. The OTP/code is the credential; OTPs expire (24h) an
 - `POST /api/orders/{id}/dispute` `{ "reason": "..." }` — freezes funds (`Held`/`Delivered` only)
 - `POST /api/orders/{id}/verify-otp` `{ "otp": "123456" }` — legacy/rider path: releases digital orders and driver-less dispatch orders. Orders **with** an assigned driver must use the driver portal below.
 
-`OrderDto` (amounts in kobo): `id, vendorPhone, customerName, customerPhone, deliveryAddress, items[{description,quantity,unitPriceKobo}], amountKobo, currency, status, paystackReference, paystackAuthUrl, heldAt, releasedAt, transferReference, refundReference, fulfillment, deliveryFeeKobo, driverPhone, driverTransferReference, deliveredAt, releaseDueAt, disputeReason, payVirtualAccountNumber/Bank`.
+`OrderDto` (amounts in kobo): `id, vendorPhone, customerName, customerPhone, buyerEmail, deliveryAddress, items[{description,quantity,unitPriceKobo}], amountKobo, currency, status, paystackReference, paystackAuthUrl, heldAt, releasedAt, transferReference, refundReference, fulfillment, deliveryFeeKobo, driverPhone, driverTransferReference, deliveredAt, releaseDueAt, disputeReason, payVirtualAccountNumber/Bank`.
 
 ---
 
@@ -177,4 +180,4 @@ These power the track page. The OTP/code is the credential; OTPs expire (24h) an
 **Driver app:** request-code → verify-code → assigned list → confirm with buyer OTP.
 
 ## 7. WhatsApp bot (for context, not frontend work)
-Same backend via chat: gated to verified + onboarded vendors (others get a signup/onboarding nudge with frontend links — set `Frontend__BaseUrl` so links render). Menu: create link (guided: customer → items → amount → fee → driver → confirm), track (short status), help. Chat is audited server-side; no frontend action needed.
+Same backend via chat: gated to verified + onboarded vendors (others get a signup/onboarding nudge with frontend links — set `Frontend__BaseUrl` so links render). Menu: create link (guided: customer → phone → **buyer email** → address → items → amount → fee → driver phone/account/**bank name** → holder confirm → order confirm), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), track (short status), help. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.

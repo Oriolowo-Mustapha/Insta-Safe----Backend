@@ -17,4 +17,5 @@ public sealed record OrderDto(
     DateTimeOffset? ReleaseDueAt = null,
     string? DisputeReason = null,
     string? PayVirtualAccountNumber = null,
-    string? PayVirtualAccountBank = null);
+    string? PayVirtualAccountBank = null,
+    string? BuyerEmail = null);
