@@ -112,8 +112,11 @@ public class ConversationRouter
                     break;
                 }
                 draft = draft with { CustomerPhone = _sanitizer.Clean(custPhone, 20) };
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskAddress,
-                    Domain.Entities.ConversationStep.DraftAddress, ct, draft);
+                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskBuyerEmail,
+                    Domain.Entities.ConversationStep.DraftBuyerEmail, ct, draft);
+                break;
+            case Domain.Entities.ConversationStep.DraftBuyerEmail:
+                await HandleBuyerEmailStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftAddress:
                 draft = draft with { Address = _sanitizer.Clean(text, 500) };
@@ -340,7 +343,10 @@ public class ConversationRouter
                 i.UnitPriceNgn)).ToList(),
             parsed.TotalNgn,
             parsed.DeliveryFeeNgn < 0 ? 0 : parsed.DeliveryFeeNgn,
-            _sanitizer.Clean(PhoneNormalizer.Normalize(parsed.DriverPhone), 20));
+            _sanitizer.Clean(PhoneNormalizer.Normalize(parsed.DriverPhone), 20),
+            BuyerEmail: InstaSafe.Application.Common.Helpers.EmailChecker.IsPlausible(parsed.BuyerEmail)
+                ? _sanitizer.Clean(parsed.BuyerEmail.Trim().ToLowerInvariant(), 200)
+                : "");
 
         if (draft.IsComplete())
         {
@@ -473,6 +479,22 @@ public class ConversationRouter
             Domain.Entities.ConversationStep.DraftDriverBankName, ct, draft);
     }
 
+    private async Task HandleBuyerEmailStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var email = text.Trim().ToLowerInvariant();
+        if (!EmailChecker.IsPlausible(email))
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "That doesn't look like an email address. Please send the buyer's email (e.g. chidi@example.com).",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { BuyerEmail = _sanitizer.Clean(email, 200) };
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskAddress,
+            Domain.Entities.ConversationStep.DraftAddress, ct, draft);
+    }
+
     private async Task HandleDriverBankNameStepAsync(
         Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
     {
@@ -589,7 +611,9 @@ public class ConversationRouter
                 draft.Address,
                 draft.Items.Select(i => new OrderItemInput(i.Description, i.Quantity, i.UnitPriceNgn)).ToList(),
                 draft.TotalNgn,
-                $"{phone}@whatsapp.instasafe",
+                string.IsNullOrWhiteSpace(draft.BuyerEmail)
+                    ? $"{phone}@whatsapp.instasafe"
+                    : draft.BuyerEmail,
                 Fulfillment: Domain.Enums.FulfillmentType.Dispatch,
                 DeliveryFeeNgn: draft.DeliveryFeeNgn,
                 DriverPhone: string.IsNullOrWhiteSpace(draft.DriverPhone) ? null : draft.DriverPhone,
@@ -829,12 +853,13 @@ public class ConversationRouter
             draft.CustomerName, draft.CustomerPhone, draft.Address,
             draft.ItemsSummary(), draft.TotalNgn,
             draft.DeliveryFeeNgn, draft.DriverPhone, draft.DriverBankName,
-            draft.DriverHolderName);
+            draft.DriverHolderName, draft.BuyerEmail);
 
     private static Domain.Entities.ConversationStep FirstMissingStep(OrderDraft draft)
     {
         if (string.IsNullOrWhiteSpace(draft.CustomerName)) return Domain.Entities.ConversationStep.DraftCustomerName;
         if (string.IsNullOrWhiteSpace(draft.CustomerPhone)) return Domain.Entities.ConversationStep.DraftCustomerPhone;
+        if (string.IsNullOrWhiteSpace(draft.BuyerEmail)) return Domain.Entities.ConversationStep.DraftBuyerEmail;
         if (string.IsNullOrWhiteSpace(draft.Address)) return Domain.Entities.ConversationStep.DraftAddress;
         if (draft.Items.Count == 0) return Domain.Entities.ConversationStep.DraftItems;
         if (draft.TotalNgn <= 0) return Domain.Entities.ConversationStep.DraftAmount;
@@ -851,6 +876,7 @@ public class ConversationRouter
     {
         Domain.Entities.ConversationStep.DraftCustomerName => ConversationTexts.AskCustomerName,
         Domain.Entities.ConversationStep.DraftCustomerPhone => ConversationTexts.AskCustomerPhone,
+        Domain.Entities.ConversationStep.DraftBuyerEmail => ConversationTexts.AskBuyerEmail,
         Domain.Entities.ConversationStep.DraftAddress => ConversationTexts.AskAddress,
         Domain.Entities.ConversationStep.DraftItems => ConversationTexts.AskItems,
         Domain.Entities.ConversationStep.DraftAmount => ConversationTexts.AskAmount,

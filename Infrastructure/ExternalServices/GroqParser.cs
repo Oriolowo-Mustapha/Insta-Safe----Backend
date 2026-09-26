@@ -32,7 +32,7 @@ public class GroqParser : IGroqParser
 
     public async Task<ParsedOrder> ParseOrderTextAsync(string rawText, CancellationToken ct)
     {
-        var schemaHint = """{"customer_name":"string","customer_phone":"string","address":"string","items":[{"description":"string","quantity":1,"unit_price_ngn":0}],"total_ngn":0,"delivery_fee_ngn":0,"driver_phone":"string or empty"}""";
+        var schemaHint = """{"customer_name":"string","customer_phone":"string","buyer_email":"string or empty","address":"string","items":[{"description":"string","quantity":1,"unit_price_ngn":0}],"total_ngn":0,"delivery_fee_ngn":0,"driver_phone":"string or empty"}""";
         var body = new
         {
             model = _opts.Model,
@@ -62,7 +62,8 @@ public class GroqParser : IGroqParser
             items,
             r.TryGetProperty("total_ngn", out var t) ? t.GetInt64() : 0,
             r.TryGetProperty("delivery_fee_ngn", out var f) ? f.GetInt64() : 0,
-            r.TryGetProperty("driver_phone", out var dp) ? dp.GetString() ?? "" : "");
+            r.TryGetProperty("driver_phone", out var dp) ? dp.GetString() ?? "" : "",
+            r.TryGetProperty("buyer_email", out var be) ? be.GetString() ?? "" : "");
     }
 
     public async Task<ChatIntent> ClassifyIntentAsync(string rawText, CancellationToken ct)

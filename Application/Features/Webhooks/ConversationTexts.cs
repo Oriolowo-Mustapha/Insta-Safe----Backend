@@ -37,6 +37,7 @@ public static class ConversationTexts
 
     public const string AskCustomerName = "Let's create your escrow link.\nWho is the customer? Reply with the customer's full name.";
     public const string AskCustomerPhone = "Got it. What is the customer's phone number? (e.g. 08012345678)";
+    public const string AskBuyerEmail = "Thanks. What is the buyer's email address? (for the receipt and payment link)";
     public const string AskAddress = "Thanks. What is the delivery address?";
     public const string AskItems =
         "Now the items. Send them in one message, e.g:\n" +
@@ -84,7 +85,7 @@ public static class ConversationTexts
     public static string ConfirmSummary(
         string customerName, string customerPhone, string address, string itemsLines,
         long totalNgn, long deliveryFeeNgn, string driverPhone, string driverBank = "",
-        string driverHolder = "")
+        string driverHolder = "", string buyerEmail = "")
     {
         var feeLine = deliveryFeeNgn > 0 ? $"\nDelivery fee: ₦{deliveryFeeNgn:N0}" : "";
         var driverLine = !string.IsNullOrWhiteSpace(driverPhone)
@@ -92,11 +93,12 @@ public static class ConversationTexts
                 + (!string.IsNullOrWhiteSpace(driverBank) && string.IsNullOrWhiteSpace(driverHolder)
                     ? " — holder unverified, please double-check" : "")
             : "";
+        var emailLine = string.IsNullOrWhiteSpace(buyerEmail) ? "" : $"\nBuyer email: {buyerEmail}";
         return "Please confirm your order:\n" +
             $"Customer: {customerName} ({customerPhone})\n" +
             $"Address: {address}\n" +
             $"Items:\n{itemsLines}\n" +
-            $"Total: ₦{totalNgn:N0}{feeLine}\n" +
+            $"Total: ₦{totalNgn:N0}{feeLine}{emailLine}\n" +
             $"Buyer pays: ₦{totalNgn + deliveryFeeNgn:N0}{driverLine}\n" +
             "Reply YES to create the payment link, or CANCEL to stop.";
     }

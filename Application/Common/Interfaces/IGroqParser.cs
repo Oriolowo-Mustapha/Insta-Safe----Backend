@@ -22,6 +22,6 @@ public sealed record ChatIntent(ChatIntentKind Kind, int? MenuOption, string? Tr
 public sealed record ParsedOrder(
     string CustomerName, string CustomerPhone, string Address,
     List<ParsedItem> Items, long TotalNgn,
-    long DeliveryFeeNgn = 0, string DriverPhone = "");
+    long DeliveryFeeNgn = 0, string DriverPhone = "", string BuyerEmail = "");
 
 public sealed record ParsedItem(string Description, int Quantity, long UnitPriceNgn);

@@ -15,7 +15,8 @@ public sealed record OrderDraft(
     string DriverAccountNumber = "",
     string DriverBankCode = "",
     string DriverBankName = "",
-    string DriverHolderName = "")
+    string DriverHolderName = "",
+    string BuyerEmail = "")
 {
     public static OrderDraft Empty() => new("", "", "", new List<DraftItem>(), 0);
 
@@ -41,6 +42,7 @@ public sealed record OrderDraft(
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(CustomerName)) missing.Add("customer name");
         if (string.IsNullOrWhiteSpace(CustomerPhone)) missing.Add("customer phone");
+        if (string.IsNullOrWhiteSpace(BuyerEmail)) missing.Add("buyer email");
         if (string.IsNullOrWhiteSpace(Address)) missing.Add("delivery address");
         if (Items.Count == 0) missing.Add("items");
         if (TotalNgn <= 0) missing.Add("total amount");

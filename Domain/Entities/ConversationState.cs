@@ -6,6 +6,7 @@ public enum ConversationStep
     AwaitingMenuChoice = 1,
     DraftCustomerName = 2,
     DraftCustomerPhone = 3,
+    DraftBuyerEmail = 15,
     DraftAddress = 4,
     DraftItems = 5,
     DraftAmount = 6,

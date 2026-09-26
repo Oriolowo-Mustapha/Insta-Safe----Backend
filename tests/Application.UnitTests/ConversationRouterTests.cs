@@ -285,6 +285,7 @@ public class ConversationRouterTests
         await Send(phone, "Chidi");
         Assert.Equal(ConversationStep.DraftCustomerPhone, State(phone).Step);
         await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
         Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
         await Send(phone, "Lekki Phase 1");
         Assert.Equal(ConversationStep.DraftItems, State(phone).Step);
@@ -321,6 +322,7 @@ public class ConversationRouterTests
         await Send(phone, "1");
         await Send(phone, "Chidi");
         await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki Phase 1");
         await Send(phone, "2x Sneakers @22500");
         Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
@@ -365,6 +367,7 @@ public class ConversationRouterTests
         await Send(phone, "1");
         await Send(phone, "Chidi");
         await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
         await Send(phone, "5000");
@@ -386,6 +389,7 @@ public class ConversationRouterTests
         await Send(phone, "1");
         await Send(phone, "Chidi");
         await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
         await Send(phone, "0");
@@ -412,6 +416,7 @@ public class ConversationRouterTests
         await Send(phone, "1");
         await Send(phone, "Chidi");
         await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
         Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
@@ -439,6 +444,7 @@ public class ConversationRouterTests
         await Send(phone, "1");
         await Send(phone, "Chidi");
         await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
         await Send(phone, "5000");
@@ -464,6 +470,7 @@ public class ConversationRouterTests
         await Send(phone, "1");
         await Send(phone, "Chidi");
         await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
         await Send(phone, "5000");
@@ -610,7 +617,8 @@ public class ConversationRouterTests
     public void Draft_RoundTripsThroughJson()
     {
         var draft = new OrderDraft("Chidi", "0801", "Lekki",
-            new List<DraftItem> { new("Sneakers", 2, 22500) }, 45000);
+            new List<DraftItem> { new("Sneakers", 2, 22500) }, 45000,
+            BuyerEmail: "chidi@example.com");
         var loaded = OrderDraft.Load(draft.Save());
         Assert.True(loaded.IsComplete());
         Assert.Equal("Chidi", loaded.CustomerName);
@@ -622,6 +630,24 @@ public class ConversationRouterTests
         await Send(phone, "1");
         await Send(phone, "Chidi");
         await Send(phone, "08087654321");
+        Assert.Equal(ConversationStep.DraftBuyerEmail, State(phone).Step);
+        await Send(phone, "chidi@example.com");
+        Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task BuyerEmailStep_RejectsGarbage()
+    {
+        const string phone = "08010000030";
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+
+        await Send(phone, "not-an-email");
+
+        Assert.Equal(ConversationStep.DraftBuyerEmail, State(phone).Step);
+        Assert.Contains("email", _sender.LastBody);
+        await Send(phone, "chidi@example.com");
         Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
     }
 
