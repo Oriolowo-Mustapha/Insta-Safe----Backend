@@ -728,7 +728,7 @@ public class ConversationRouterTests
 
         await Send(phone, "D1");
 
-        Assert.Empty(_states.Drafts.Where(d => d.Status == DraftTicketStatus.Open));
+        Assert.DoesNotContain(_states.Drafts, d => d.Status == DraftTicketStatus.Open);
         Assert.Equal(ConversationStep.AwaitingMenuChoice, State(phone).Step);
     }
 
@@ -753,7 +753,7 @@ public class ConversationRouterTests
         var done = _states.Drafts.Where(d => d.Status == DraftTicketStatus.Completed).ToList();
         Assert.Single(done);
         Assert.Equal(orderId, done[0].CompletedOrderId);
-        Assert.Empty(_states.Drafts.Where(d => d.Status == DraftTicketStatus.Open));
+        Assert.DoesNotContain(_states.Drafts, d => d.Status == DraftTicketStatus.Open);
     }
 
     [Fact]
