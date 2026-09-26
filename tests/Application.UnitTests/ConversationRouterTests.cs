@@ -769,6 +769,6 @@ public class ConversationRouterTests
         await Send(phone, "Chidi");
 
         Assert.Contains("saved your progress", _sender.LastBody);
-        Assert.Single(_states.Drafts.Where(d => d.Status == DraftTicketStatus.Open));
+        Assert.Single(_states.Drafts, d => d.Status == DraftTicketStatus.Open);
     }
 }
