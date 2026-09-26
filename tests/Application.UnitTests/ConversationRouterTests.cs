@@ -636,6 +636,29 @@ public class ConversationRouterTests
     }
 
     [Fact]
+    public async Task Resume_OnlyEmailMissing_GoesStraightToConfirm()
+    {
+        const string phone = "08010000031";
+        SeedVendor(phone);
+        var draft = new OrderDraft("Chidi", "2348028613918", "No 15 Ajangbohun",
+            new List<DraftItem> { new("Abaya", 2, 40000) }, 83000, 3000,
+            "2347088201223", "1043626025", "058", "Guaranty Trust Bank", "Musa Rider", "");
+        _states.Store[InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone)] =
+            new ConversationState
+            {
+                Phone = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone),
+                Step = ConversationStep.DraftBuyerEmail,
+                DraftJson = draft.Save()
+            };
+
+        await Send(phone, "chidi@example.com");
+
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+        Assert.Contains("Please confirm", _sender.LastBody);
+        Assert.DoesNotContain("delivery address", _sender.LastBody);
+    }
+
+    [Fact]
     public async Task BuyerEmailStep_RejectsGarbage()
     {
         const string phone = "08010000030";

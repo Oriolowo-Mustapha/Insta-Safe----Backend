@@ -99,8 +99,7 @@ public class ConversationRouter
             case Domain.Entities.ConversationStep.DraftCustomerName:
                 if (text.Length > 120) { await ReplyAndSaveAsync(state, phone, replyTo, "That name is too long — please send a shorter name.", state.Step, ct); break; }
                 draft = draft with { CustomerName = _sanitizer.Clean(text, 120) };
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskCustomerPhone,
-                    Domain.Entities.ConversationStep.DraftCustomerPhone, ct, draft);
+                await AdvanceAsync(state, phone, replyTo, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftCustomerPhone:
                 var custPhone = PhoneNormalizer.Normalize(text);
@@ -112,16 +111,14 @@ public class ConversationRouter
                     break;
                 }
                 draft = draft with { CustomerPhone = _sanitizer.Clean(custPhone, 20) };
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskBuyerEmail,
-                    Domain.Entities.ConversationStep.DraftBuyerEmail, ct, draft);
+                await AdvanceAsync(state, phone, replyTo, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftBuyerEmail:
                 await HandleBuyerEmailStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftAddress:
                 draft = draft with { Address = _sanitizer.Clean(text, 500) };
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskItems,
-                    Domain.Entities.ConversationStep.DraftItems, ct, draft);
+                await AdvanceAsync(state, phone, replyTo, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftItems:
                 await HandleItemsStepAsync(state, phone, replyTo, text, draft, ct);
@@ -431,8 +428,7 @@ public class ConversationRouter
         draft = draft with { DeliveryFeeNgn = fee };
         if (fee == 0)
         {
-            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
-                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            await AdvanceAsync(state, phone, replyTo, draft, ct);
             return;
         }
         await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverPhone,
@@ -445,9 +441,8 @@ public class ConversationRouter
         var upper = text.ToUpperInvariant();
         if (upper is "SKIP" or "NONE" or "0")
         {
-            draft = draft with { DeliveryFeeNgn = 0, DriverPhone = "", DriverAccountNumber = "", DriverBankCode = "" };
-            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
-                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            draft = draft with { DeliveryFeeNgn = 0, DriverPhone = "", DriverAccountNumber = "", DriverBankCode = "", DriverBankName = "", DriverHolderName = "" };
+            await AdvanceAsync(state, phone, replyTo, draft, ct);
             return;
         }
         var driverPhone = PhoneNormalizer.Normalize(text);
@@ -491,8 +486,7 @@ public class ConversationRouter
             return;
         }
         draft = draft with { BuyerEmail = _sanitizer.Clean(email, 200) };
-        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskAddress,
-            Domain.Entities.ConversationStep.DraftAddress, ct, draft);
+        await AdvanceAsync(state, phone, replyTo, draft, ct);
     }
 
     private async Task HandleDriverBankNameStepAsync(
@@ -869,7 +863,26 @@ public class ConversationRouter
             if (string.IsNullOrWhiteSpace(draft.DriverAccountNumber)) return Domain.Entities.ConversationStep.DraftDriverAccount;
             if (string.IsNullOrWhiteSpace(draft.DriverBankCode)) return Domain.Entities.ConversationStep.DraftDriverBankName;
         }
-        return Domain.Entities.ConversationStep.DraftDeliveryFee;
+        if (!draft.IsComplete()) return Domain.Entities.ConversationStep.DraftDeliveryFee;
+        return Domain.Entities.ConversationStep.Confirming;
+    }
+
+    /// <summary>
+    /// Single advancement rule for every draft step: complete → confirm
+    /// summary, otherwise prompt for the first missing field. Never re-asks
+    /// for fields already filled (e.g. resumed tickets).
+    /// </summary>
+    private async Task AdvanceAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, OrderDraft draft, CancellationToken ct)
+    {
+        if (draft.IsComplete())
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            return;
+        }
+        var next = FirstMissingStep(draft);
+        await ReplyAndSaveAsync(state, phone, replyTo, PromptFor(next), next, ct, draft);
     }
 
     private static string PromptFor(Domain.Entities.ConversationStep step) => step switch
