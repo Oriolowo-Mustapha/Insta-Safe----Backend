@@ -55,6 +55,29 @@ public sealed record OrderDraft(
 
     public bool IsComplete() => string.IsNullOrEmpty(MissingFields());
 
+    public bool IsEmpty() =>
+        string.IsNullOrWhiteSpace(CustomerName)
+        && string.IsNullOrWhiteSpace(CustomerPhone)
+        && string.IsNullOrWhiteSpace(Address)
+        && Items.Count == 0
+        && TotalNgn <= 0
+        && DeliveryFeeNgn <= 0
+        && string.IsNullOrWhiteSpace(DriverPhone)
+        && string.IsNullOrWhiteSpace(DriverAccountNumber)
+        && string.IsNullOrWhiteSpace(DriverBankCode);
+
     public string ItemsSummary() =>
         string.Join("\n", Items.Select(i => $"- {i.Quantity}x {i.Description} @ ₦{i.UnitPriceNgn:N0}"));
+
+    public string OneLineSummary()
+    {
+        var who = string.IsNullOrWhiteSpace(CustomerName) ? "Unnamed customer" : CustomerName;
+        var what = Items.Count == 0
+            ? "no items yet"
+            : string.Join(", ", Items.Select(i => $"{i.Quantity}x {i.Description}"));
+        var total = TotalNgn > 0 ? $"₦{(TotalNgn + DeliveryFeeNgn):N0}" : "amount TBD";
+        var missing = MissingFields();
+        return $"{who} — {what}, {total}" +
+            (string.IsNullOrEmpty(missing) ? " (ready to confirm)" : $", missing: {missing}");
+    }
 }

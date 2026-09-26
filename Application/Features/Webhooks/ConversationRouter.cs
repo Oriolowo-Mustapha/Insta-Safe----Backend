@@ -11,6 +11,7 @@ namespace InstaSafe.Application.Features.Webhooks;
 public class ConversationRouter
 {
     public static readonly TimeSpan StateExpiry = TimeSpan.FromMinutes(30);
+    public static readonly TimeSpan DraftRetention = TimeSpan.FromDays(7);
 
     private readonly IConversationRepository _states;
     private readonly IVendorRepository _vendors;
@@ -62,23 +63,24 @@ public class ConversationRouter
             && state.UpdatedAt.HasValue
             && DateTimeOffset.UtcNow - state.UpdatedAt.Value > StateExpiry)
         {
-            Reset(state);
+            await PersistAndResetAsync(state, ct);
             await ReplyAndSaveAsync(state, phone, replyTo,
-                ConversationTexts.SessionExpired + "\n\n" + ConversationTexts.Menu,
+                ConversationTexts.SessionExpired + "\n" + ConversationTexts.ProgressSaved +
+                "\n\n" + await GetMenuAsync(phone, ct),
                 Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
             return true;
         }
         var upper = text.ToUpperInvariant();
         if (upper is "MENU")
         {
-            Reset(state);
-            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Menu,
+            await PersistAndResetAsync(state, ct);
+            await ReplyAndSaveAsync(state, phone, replyTo, await GetMenuAsync(phone, ct),
                 Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
             return true;
         }
         if (upper is "CANCEL" or "STOP")
         {
-            Reset(state);
+            await PersistAndResetAsync(state, ct);
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Cancelled,
                 Domain.Entities.ConversationStep.Idle, ct);
             return true;
@@ -89,8 +91,10 @@ public class ConversationRouter
         switch (state.Step)
         {
             case Domain.Entities.ConversationStep.Idle:
-            case Domain.Entities.ConversationStep.AwaitingMenuChoice:
-                await HandleMenuOrIntentAsync(state, phone, replyTo, text, draft, ct);
+            case Domain.Entities.ConversationStep.AwaitingMenuChoice:                await HandleMenuOrIntentAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.BrowsingDrafts:
+                await HandleBrowseStepAsync(state, phone, replyTo, text, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftCustomerName:
                 if (text.Length > 120) { await ReplyAndSaveAsync(state, phone, replyTo, "That name is too long — please send a shorter name.", state.Step, ct); break; }
@@ -169,6 +173,11 @@ public class ConversationRouter
                 Domain.Entities.ConversationStep.Idle, ct);
             return;
         }
+        if (text is "4")
+        {
+            await ShowDraftListAsync(state, phone, replyTo, ct);
+            return;
+        }
 
         ChatIntent intent;
         try
@@ -185,7 +194,7 @@ public class ConversationRouter
         {
             case ChatIntentKind.Greeting:
                 await ReplyAndSaveAsync(state, phone, replyTo,
-                    ConversationTexts.Welcome + "\n\n" + ConversationTexts.Menu,
+                    ConversationTexts.Welcome + "\n\n" + await GetMenuAsync(phone, ct),
                     Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
                 break;
             case ChatIntentKind.MenuSelect:
@@ -212,10 +221,70 @@ public class ConversationRouter
                 break;
             default:
                 await ReplyAndSaveAsync(state, phone, replyTo,
-                    "I didn't quite get that. " + ConversationTexts.Menu,
+                    "I didn't quite get that. " + await GetMenuAsync(phone, ct),
                     Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
                 break;
         }
+    }
+
+    private async Task ShowDraftListAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, CancellationToken ct)
+    {
+        var drafts = await GetOpenDraftsAsync(phone, ct);
+        if (drafts.Count == 0)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.NoDrafts,
+                Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
+            return;
+        }
+        var summaries = drafts
+            .Select(d => OrderDraft.Load(d.DraftJson).OneLineSummary())
+            .ToList();
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.DraftList(summaries),
+            Domain.Entities.ConversationStep.BrowsingDrafts, ct);
+    }
+
+    private async Task HandleBrowseStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
+    {
+        var upper = text.ToUpperInvariant();
+        if (upper.StartsWith("D") && int.TryParse(upper[1..], out var discard) && discard >= 1)
+        {
+            var drafts = await GetOpenDraftsAsync(phone, ct);
+            if (discard <= drafts.Count)
+            {
+                var tracked = await _states.GetDraftAsync(drafts[discard - 1].Id, ct);
+                if (tracked is not null)
+                {
+                    tracked.Status = Domain.Entities.DraftTicketStatus.Discarded;
+                    await _states.SaveAsync(ct);
+                }
+                await ShowDraftListAsync(state, phone, replyTo, ct);
+                return;
+            }
+        }
+
+        if (int.TryParse(text.Trim(), out var pick) && pick >= 1)
+        {
+            var drafts = await GetOpenDraftsAsync(phone, ct);
+            if (pick <= drafts.Count)
+            {
+                var chosen = drafts[pick - 1];
+                var draft = OrderDraft.Load(chosen.DraftJson);
+                state.CurrentDraftId = chosen.Id;
+                var next = draft.IsComplete()
+                    ? Domain.Entities.ConversationStep.Confirming
+                    : FirstMissingStep(draft);
+                var intro = ConversationTexts.DraftLoaded + "\n\n" +
+                    (next == Domain.Entities.ConversationStep.Confirming
+                        ? ConfirmText(draft)
+                        : PromptFor(next));
+                await ReplyAndSaveAsync(state, phone, replyTo, intro, next, ct, draft);
+                return;
+            }
+        }
+
+        await ShowDraftListAsync(state, phone, replyTo, ct);
     }
 
     private async Task HandleMenuOptionAsync(
@@ -235,8 +304,11 @@ public class ConversationRouter
                 await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Help,
                     Domain.Entities.ConversationStep.Idle, ct);
                 break;
+            case 4:
+                await ShowDraftListAsync(state, phone, replyTo, ct);
+                break;
             default:
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Menu,
+                await ReplyAndSaveAsync(state, phone, replyTo, await GetMenuAsync(phone, ct),
                     Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
                 break;
         }
@@ -505,6 +577,15 @@ public class ConversationRouter
 
             if (result.IsSuccess)
             {
+                if (state.CurrentDraftId is not null)
+                {
+                    var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+                    if (ticket is not null)
+                    {
+                        ticket.Status = Domain.Entities.DraftTicketStatus.Completed;
+                        ticket.CompletedOrderId = result.Value!.Id;
+                    }
+                }
                 Reset(state);
                 state.Touch();
                 await _states.SaveAsync(ct);
@@ -513,11 +594,9 @@ public class ConversationRouter
                 return;
             }
 
+            await PersistAndResetAsync(state, ct);
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.OrderFailed(result.Error ?? "unknown error"),
                 Domain.Entities.ConversationStep.Idle, ct);
-            Reset(state);
-            state.Touch();
-            await _states.SaveAsync(ct);
         }
         catch (ValidationException ex)
         {
@@ -536,11 +615,11 @@ public class ConversationRouter
         catch (Exception ex)
         {
             // Anything else (Paystack/network/DB): never leave the vendor hanging.
-            // Reset to Idle and say so; details stay in the logs + App Insights.
+            // Draft stays resumable via Continue; details stay in logs + App Insights.
             _logger.LogError(ex, "Order creation failed for {Phone}", phone);
-            Reset(state);
+            await PersistAndResetAsync(state, ct);
             await ReplyAndSaveAsync(state, phone, replyTo,
-                "Something went wrong creating your order. Please try again, or type MENU to start over.",
+                "Something went wrong creating your order. Your progress is saved — try again from 4. Continue, or type MENU.",
                 Domain.Entities.ConversationStep.Idle, ct);
         }
     }
@@ -597,6 +676,69 @@ public class ConversationRouter
     {
         state.Step = Domain.Entities.ConversationStep.Idle;
         state.DraftJson = null;
+        state.CurrentDraftId = null;
+    }
+
+    /// <summary>
+    /// Saves in-progress work into its draft ticket (creating one when the
+    /// draft has content but no ticket yet), drops empty tickets, then resets
+    /// the live state. Drafts are never silently discarded.
+    /// </summary>
+    private async Task PersistAndResetAsync(Domain.Entities.ConversationState state, CancellationToken ct)
+    {
+        var draft = OrderDraft.Load(state.DraftJson);
+        if (state.CurrentDraftId is not null)
+        {
+            var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+            if (ticket is not null)
+            {
+                if (draft.IsEmpty())
+                    await _states.RemoveDraftAsync(ticket, ct);
+                else if (ticket.Status == Domain.Entities.DraftTicketStatus.Open)
+                    ticket.DraftJson = draft.Save();
+            }
+        }
+        else if (!draft.IsEmpty())
+        {
+            await _states.AddDraftAsync(new Domain.Entities.SavedOrderDraft
+            {
+                VendorPhone = state.Phone,
+                DraftJson = draft.Save(),
+                Status = Domain.Entities.DraftTicketStatus.Open
+            }, ct);
+        }
+        Reset(state);
+    }
+
+    /// <summary>Open drafts, lazily abandoning ones untouched for 7 days.</summary>
+    private async Task<List<Domain.Entities.SavedOrderDraft>> GetOpenDraftsAsync(
+        string phone, CancellationToken ct)
+    {
+        var cutoff = DateTimeOffset.UtcNow - DraftRetention;
+        var drafts = await _states.ListDraftsAsync(phone, Domain.Entities.DraftTicketStatus.Open, ct);
+        var fresh = new List<Domain.Entities.SavedOrderDraft>();
+        foreach (var d in drafts)
+        {
+            var touched = d.UpdatedAt ?? d.CreatedAt;
+            if (touched < cutoff)
+            {
+                var tracked = await _states.GetDraftAsync(d.Id, ct);
+                if (tracked is not null) tracked.Status = Domain.Entities.DraftTicketStatus.Abandoned;
+            }
+            else
+            {
+                fresh.Add(d);
+            }
+        }
+        return fresh;
+    }
+
+    private async Task<string> GetMenuAsync(string phone, CancellationToken ct)
+    {
+        var open = await GetOpenDraftsAsync(phone, ct);
+        return open.Count == 0
+            ? ConversationTexts.Menu
+            : ConversationTexts.MenuWithContinue(open.Count);
     }
 
     private async Task ReplyAndSaveAsync(
@@ -604,12 +746,52 @@ public class ConversationRouter
         Domain.Entities.ConversationStep next, CancellationToken ct, OrderDraft? draft = null)
     {
         state.Step = next;
-        if (draft is not null) state.DraftJson = draft.Save();
+        if (draft is not null)
+        {
+            state.DraftJson = draft.Save();
+            await EnsureTicketAsync(state, draft, ct);
+        }
         else if (next == Domain.Entities.ConversationStep.Idle
             || next == Domain.Entities.ConversationStep.AwaitingMenuChoice) state.DraftJson = null;
         state.Touch();
         await _states.SaveAsync(ct);
         await SendWithTimeoutAsync(replyTo, reply);
+    }
+
+    /// <summary>
+    /// Every draft-bearing step mirrors into a ticket row so progress
+    /// survives resets and restarts. Empty drafts never create tickets.
+    /// </summary>
+    private async Task EnsureTicketAsync(
+        Domain.Entities.ConversationState state, OrderDraft draft, CancellationToken ct)
+    {
+        if (draft.IsEmpty()) return;
+        if (state.CurrentDraftId is not null)
+        {
+            var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+            if (ticket is not null)
+            {
+                if (ticket.Status == Domain.Entities.DraftTicketStatus.Open)
+                    ticket.DraftJson = draft.Save();
+                else
+                    state.CurrentDraftId = null;
+            }
+            else
+            {
+                state.CurrentDraftId = null;
+            }
+        }
+        if (state.CurrentDraftId is null)
+        {
+            var ticket = new Domain.Entities.SavedOrderDraft
+            {
+                VendorPhone = state.Phone,
+                DraftJson = draft.Save(),
+                Status = Domain.Entities.DraftTicketStatus.Open
+            };
+            await _states.AddDraftAsync(ticket, ct);
+            state.CurrentDraftId = ticket.Id;
+        }
     }
 
     private async Task SendWithTimeoutAsync(string replyTo, string reply)

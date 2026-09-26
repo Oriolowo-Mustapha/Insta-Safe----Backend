@@ -74,7 +74,7 @@ public class GroqParser : IGroqParser
             response_format = new { type = "json_object" },
             messages = new object[]
             {
-                new { role = "system", content = "You route WhatsApp messages for InstaSafe, a Nigerian escrow service. Reply with JSON only, matching " + schemaHint + ". Examples: 'hi' -> greeting. '1'/'2'/'3' -> menu_select with that menu_option. '2 sneakers for Chidi, 08012345678, Lekki, 45000' -> create_order. 'where is my order ref-123' -> track_order with track_reference 'ref-123'. 'help'/'support' -> help. 'cancel'/'stop' -> cancel. Anything else -> unknown." },
+                new { role = "system", content = "You route WhatsApp messages for InstaSafe, a Nigerian escrow service. Reply with JSON only, matching " + schemaHint + ". Examples: 'hi' -> greeting. '1'/'2'/'3'/'4' -> menu_select with that menu_option (4 = continue an unfinished order). '2 sneakers for Chidi, 08012345678, Lekki, 45000' -> create_order. 'where is my order ref-123' -> track_order with track_reference 'ref-123'. 'help'/'support' -> help. 'cancel'/'stop' -> cancel. Anything else -> unknown." },
                 new { role = "user", content = rawText }
             },
             temperature = 0

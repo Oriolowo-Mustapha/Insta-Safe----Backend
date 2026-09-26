@@ -25,6 +25,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<Dispatcher> Dispatchers => Set<Dispatcher>();
     public DbSet<ConversationState> ConversationStates => Set<ConversationState>();
+    public DbSet<SavedOrderDraft> SavedOrderDrafts => Set<SavedOrderDraft>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<EscrowLedger> Ledgers => Set<EscrowLedger>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
@@ -65,6 +66,15 @@ public class AppDbContext : DbContext, IAppDbContext
             e.Property(x => x.Body).HasMaxLength(1000).IsRequired();
             e.HasIndex(x => x.Phone);
             e.HasIndex(x => x.CreatedAt);
+        });
+
+        b.Entity<SavedOrderDraft>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.VendorPhone).HasMaxLength(20).IsRequired();
+            e.Property(x => x.DraftJson).HasMaxLength(4000).IsRequired();
+            e.HasIndex(x => x.VendorPhone);
+            e.HasIndex(x => x.Status);
         });
 
         b.Entity<Dispatcher>(e =>

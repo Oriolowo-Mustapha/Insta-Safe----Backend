@@ -16,6 +16,7 @@ public class ConversationRouterTests
     private sealed class FakeStates : IConversationRepository
     {
         public Dictionary<string, ConversationState> Store { get; } = new();
+        public List<SavedOrderDraft> Drafts { get; } = new();
         public Task<ConversationState?> GetByPhoneAsync(string phone, CancellationToken ct)
             => Task.FromResult(Store.TryGetValue(phone, out var s) ? s : null);
         public Task AddAsync(ConversationState state, CancellationToken ct)
@@ -24,6 +25,20 @@ public class ConversationRouterTests
             return Task.CompletedTask;
         }
         public Task SaveAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task<List<SavedOrderDraft>> ListDraftsAsync(string phone, DraftTicketStatus status, CancellationToken ct)
+            => Task.FromResult(Drafts.Where(d => d.VendorPhone == phone && d.Status == status).ToList());
+        public Task<SavedOrderDraft?> GetDraftAsync(Guid id, CancellationToken ct)
+            => Task.FromResult(Drafts.FirstOrDefault(d => d.Id == id));
+        public Task AddDraftAsync(SavedOrderDraft draft, CancellationToken ct)
+        {
+            Drafts.Add(draft);
+            return Task.CompletedTask;
+        }
+        public Task RemoveDraftAsync(SavedOrderDraft draft, CancellationToken ct)
+        {
+            Drafts.Remove(draft);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeVendors : IVendorRepository
@@ -566,5 +581,111 @@ public class ConversationRouterTests
         Assert.True(loaded.IsComplete());
         Assert.Equal("Chidi", loaded.CustomerName);
         Assert.Single(loaded.Items);
+    }
+
+    private async Task WalkToAddressStep(string phone)
+    {
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Menu_Quit_PreservesDraft_AsTicket()
+    {
+        const string phone = "08010000020";
+        await WalkToAddressStep(phone);
+
+        await Send(phone, "MENU");
+
+        Assert.Equal(ConversationStep.AwaitingMenuChoice, State(phone).Step);
+        var open = _states.Drafts.Where(d => d.Status == DraftTicketStatus.Open).ToList();
+        Assert.Single(open);
+        Assert.Contains("Chidi", OrderDraft.Load(open[0].DraftJson).CustomerName);
+    }
+
+    [Fact]
+    public async Task Menu_ShowsContinueCount_WhenDraftsOpen()
+    {
+        const string phone = "08010000021";
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Greeting, null, null);
+        await WalkToAddressStep(phone);
+        await Send(phone, "MENU");
+
+        await Send(phone, "hi");
+
+        Assert.Contains("4", _sender.LastBody);
+        Assert.Contains("Continue", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Browse_Select_ResumesAtMissingStep()
+    {
+        const string phone = "08010000022";
+        await WalkToAddressStep(phone);
+        await Send(phone, "MENU");
+
+        await Send(phone, "4");
+        Assert.Equal(ConversationStep.BrowsingDrafts, State(phone).Step);
+        Assert.Contains("Chidi", _sender.LastBody);
+
+        await Send(phone, "1");
+        Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
+        Assert.Contains("delivery address", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Browse_Discard_RemovesTicket()
+    {
+        const string phone = "08010000023";
+        await WalkToAddressStep(phone);
+        await Send(phone, "MENU");
+        await Send(phone, "4");
+
+        await Send(phone, "D1");
+
+        Assert.Empty(_states.Drafts.Where(d => d.Status == DraftTicketStatus.Open));
+        Assert.Equal(ConversationStep.AwaitingMenuChoice, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task CompleteOrder_MarksTicketCompleted()
+    {
+        const string phone = "08010000024";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
+        var orderId = Guid.NewGuid();
+        _mediator.OnCreateOrder = cmd => Result<OrderDto>.Success(new OrderDto(
+            orderId, cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
+            cmd.DeliveryAddress, new(), 4500000, "NGN", OrderStatus.AwaitingPayment,
+            "ref-1", "https://pay.test/ref-1", null, null, null));
+        await WalkToAddressStep(phone);
+        await Send(phone, "Lekki");
+        await Send(phone, "2x Sneakers @22500");
+        await Send(phone, "0");
+        await Send(phone, "YES");
+
+        Assert.Contains("Payment link", _sender.LastBody);
+        var done = _states.Drafts.Where(d => d.Status == DraftTicketStatus.Completed).ToList();
+        Assert.Single(done);
+        Assert.Equal(orderId, done[0].CompletedOrderId);
+        Assert.Empty(_states.Drafts.Where(d => d.Status == DraftTicketStatus.Open));
+    }
+
+    [Fact]
+    public async Task Expiry_PreservesDraft_InsteadOfDeleting()
+    {
+        const string phone = "08010000025";
+        await WalkToAddressStep(phone);
+        var state = State(phone);
+        typeof(InstaSafe.Domain.Common.BaseEntity).GetProperty("UpdatedAt")!
+            .GetSetMethod(true)!
+            .Invoke(state, new object?[] { DateTimeOffset.UtcNow.AddHours(-1) });
+
+        await Send(phone, "Chidi");
+
+        Assert.Contains("saved your progress", _sender.LastBody);
+        Assert.Single(_states.Drafts.Where(d => d.Status == DraftTicketStatus.Open));
     }
 }

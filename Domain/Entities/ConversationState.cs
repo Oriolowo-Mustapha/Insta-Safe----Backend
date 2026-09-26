@@ -15,7 +15,8 @@ public enum ConversationStep
     DraftDriverPhone = 10,
     DraftDriverAccount = 11,
     DraftDriverBankName = 12,
-    DraftDriverConfirm = 13
+    DraftDriverConfirm = 13,
+    BrowsingDrafts = 14
 }
 
 public class ConversationState : Common.BaseEntity
@@ -23,4 +24,5 @@ public class ConversationState : Common.BaseEntity
     public string Phone { get; set; } = string.Empty;
     public ConversationStep Step { get; set; } = ConversationStep.Idle;
     public string? DraftJson { get; set; }
+    public Guid? CurrentDraftId { get; set; }
 }

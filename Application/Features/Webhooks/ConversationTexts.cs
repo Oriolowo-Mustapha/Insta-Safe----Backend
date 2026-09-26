@@ -13,6 +13,28 @@ public static class ConversationTexts
         "3️⃣ Help / talk to support\n" +
         "Reply with 1, 2 or 3. Type MENU anytime to come back here, CANCEL to stop.";
 
+    public static string MenuWithContinue(int openCount) =>
+        "What would you like to do?\n" +
+        "1️⃣ Create escrow link (new order)\n" +
+        "2️⃣ Track an order\n" +
+        "3️⃣ Help / talk to support\n" +
+        $"4️⃣ Continue unfinished order ({openCount} saved)\n" +
+        "Reply with 1, 2, 3 or 4. Type MENU anytime to come back here, CANCEL to stop.";
+
+    public const string ProgressSaved =
+        "I've saved your progress — pick it up anytime with 4. Continue below.";
+
+    public const string NoDrafts =
+        "You have no unfinished orders. Reply 1 to create a new escrow link.";
+
+    public static string DraftList(IReadOnlyList<string> summaries) =>
+        "Your unfinished orders:\n" +
+        string.Join("\n", summaries.Select((s, i) => $"{i + 1}. {s}")) +
+        "\nReply with the number to continue, D+number to discard (e.g. D2), or MENU to go back.";
+
+    public const string DraftDiscarded = "Discarded. Anything else? Type MENU for options.";
+    public const string DraftLoaded = "Loaded — continuing where you stopped.";
+
     public const string AskCustomerName = "Let's create your escrow link.\nWho is the customer? Reply with the customer's full name.";
     public const string AskCustomerPhone = "Got it. What is the customer's phone number? (e.g. 08012345678)";
     public const string AskAddress = "Thanks. What is the delivery address?";
