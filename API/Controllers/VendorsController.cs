@@ -34,7 +34,7 @@ public class VendorsController : ControllerBase
     {
         var result = await _mediator.Send(cmd, ct);
         if (!result.IsSuccess) return BadRequest(ApiResponse<VendorDto>.FromResult(result));
-        return Ok(ApiResponse<VendorDto>.FromResult(result, "Vendor registered."));
+        return Ok(ApiResponse<VendorDto>.FromResult(result, "Vendor registered. Check your email for the verification code, then verify to continue."));
     }
 
     [HttpGet("{id:guid}")]

@@ -36,6 +36,7 @@ public static class DependencyInjection
 
         services.AddHttpClient<IPaystackClient, PaystackClient>();
         services.AddHttpClient<IGroqParser, GroqParser>();
+        services.AddHttpClient<IContactResolver, OpenWAContactResolver>();
         services.AddHttpClient<WhatsAppSender>();
         services.AddScoped<IWhatsAppSender>(sp =>
             new LoggingWhatsAppSender(
