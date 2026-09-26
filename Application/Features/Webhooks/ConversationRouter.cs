@@ -473,6 +473,16 @@ public class ConversationRouter
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.OrderFailed(ex.Message),
                 state.Step, ct, draft);
         }
+        catch (Exception ex)
+        {
+            // Anything else (Paystack/network/DB): never leave the vendor hanging.
+            // Reset to Idle and say so; details stay in the logs + App Insights.
+            _logger.LogError(ex, "Order creation failed for {Phone}", phone);
+            Reset(state);
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Something went wrong creating your order. Please try again, or type MENU to start over.",
+                Domain.Entities.ConversationStep.Idle, ct);
+        }
     }
 
     private async Task LookupAndReplyTrackAsync(

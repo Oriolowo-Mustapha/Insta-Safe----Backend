@@ -314,6 +314,28 @@ public class ConversationRouterTests
     }
 
     [Fact]
+    public async Task Confirm_PaystackFailure_RepliesInsteadOfSilence()
+    {
+        const string phone = "08010000013";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
+        _mediator.OnCreateOrder = _ => throw new HttpRequestException("Paystack down");
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "Lekki");
+        await Send(phone, "2x Sneakers @22500");
+        await Send(phone, "0");
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+
+        await Send(phone, "YES");
+
+        Assert.Contains("Something went wrong", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
     public async Task StepByStep_BadBankCode_Reasks()
     {
         const string phone = "08010000012";
