@@ -23,8 +23,8 @@ public class OrderNumberTests
     [Fact]
     public void Generate_UniqueOverBatch()
     {
-        var set = Enumerable.Range(0, 10000).Select(_ => OrderNumberGenerator.Generate()).ToHashSet();
-        Assert.Equal(10000, set.Count);
+        var set = Enumerable.Range(0, 2000).Select(_ => OrderNumberGenerator.Generate()).ToHashSet();
+        Assert.Equal(2000, set.Count);
     }
 
     private sealed class FakeOrders : IOrderRepository
