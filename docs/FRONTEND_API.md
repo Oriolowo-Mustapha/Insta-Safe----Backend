@@ -94,7 +94,7 @@ Read `vendor.emailVerified` / `vendor.onboardingCompleted` from any vendor respo
 ### Primary — password (phone OR email)
 `POST /api/auth/vendor/login` **(Public)**
 `{ "loginId": "ada@example.com", "password": "s3cretPass!" }`
-`loginId` accepts email or phone. Wrong details → `401`. Success → `{ token, vendor, expiresInHours }`.
+`loginId` accepts email or phone. Wrong details → `401`. Success → `{ token, vendor, expiresInHours, role }` (`role` is `"vendor"` here, `"admin"` for the super-admin — route dashboards by it).
 
 ### Fallback — WhatsApp OTP (recovery only, keep it out of the happy path)
 `POST /api/auth/vendor/request-code` `{ "phone": "..." }` → code via WhatsApp →
@@ -137,9 +137,9 @@ All vendor JWT, own id only (else `403`):
 }
 ```
 - `fulfillment`: `0` = Dispatch (rider + OTP + 24h window), `1` = Digital (buyer Satisfied-button flow; fee must be `0`).
-- Buyer charged `amountNgn + deliveryFeeNgn`. Driver/vendor bank fields fall back to stored details when omitted.
-- `buyerEmail` must be real — receipts + status mails go there.
-- Returns `paystackAuthUrl` (card/link payment) + `paystackReference`.
+- Buyer charged `amountNgn + deliveryFeeNgn`. Vendor bank falls back to stored payout details when omitted; **driver bank must be supplied per order** (drivers hold no stored details).
+- `buyerEmail` must be real — receipts + status mails go there. `customerPhone` must be a WhatsApp number — the payment link goes there by chat + mail.
+- Returns `orderNumber` (`IS-XXXXXX`, show it everywhere), `paystackAuthUrl` (card/link payment) + `paystackReference`.
 
 ### Bank-transfer rail (dedicated virtual account)
 - `POST /api/orders/{id}/request-bank-transfer` (vendor JWT, own order) `{ "preferredBank": "wema-bank" }` (optional; omit for default). Idempotent — repeat calls return the same account. Only from `AwaitingPayment`/`Draft`.
@@ -158,7 +158,7 @@ All vendor JWT, own id only (else `403`):
 
 ### Buyer/guest actions (all **Public**, no token)
 These power the track page. The OTP/code is the credential; OTPs expire (24h) and lock after 5 tries.
-- `GET /api/orders/by-reference/{ref}` — order detail (`ref` = Paystack reference or order id)
+- `GET /api/orders/by-reference/{ref}` — order detail (`ref` = order number, Paystack reference, or order id)
 - `GET /api/orders/by-reference/{ref}/timeline` — ordered tracker events:
   `created → payment_pending → funds_held → delivered (+inspection deadline) → released/refunded/disputed`, each `{ key, label, at }`. Render this list as the tracker UI.
 - `POST /api/orders/{id}/confirm-satisfaction` — digital orders: buyer confirms → instant release
@@ -186,7 +186,8 @@ These power the track page. The OTP/code is the credential; OTPs expire (24h) an
 **Driver app:** request-code → verify-code → assigned list → confirm with buyer OTP.
 
 ## 7. WhatsApp bot (for context, not frontend work)
-Same backend via chat: gated to verified + onboarded vendors (others get a signup/onboarding nudge with frontend links — set `Frontend__BaseUrl` so links render). Menu: create link (guided: customer → phone → **buyer email** → address → items → amount → fee → driver phone/account/**bank name** → holder confirm → order confirm), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), track (short status), help. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
+**Vendor-only.** The bot answers verified + onboarded vendors and no one else: unknown/unverified/deactivated/unfinished-onboarding senders get **silence** (logged to the audit trail, never replied to). Buyers are served purely through notifications (payment link, OTP, delivered, released, refunded) + the public track page — a buyer replying to the bot gets no answer by design. (If a vendor changes SIM, fix via `PUT /api/vendors/{id}/phone` on web.)
+Menu: create link (guided: customer → phone → buyer email → address → items → amount → fee → driver phone/account/**bank name** → holder confirm → order confirm), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), track (short status), help. `BACK`/`EDIT` steps back to the previous answered question; `MENU`/`CANCEL` preserve the draft as a ticket. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
 
 ---
 
