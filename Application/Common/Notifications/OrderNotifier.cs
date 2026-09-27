@@ -64,8 +64,16 @@ public class OrderNotifier
 
     private static string Money(long kobo) => $"₦{kobo / 100:N0}";
 
-    public async Task OrderCreatedAsync(Order order, string? buyerEmail)
+    public async Task PaymentLinkAsync(string customerPhone, string customerName, long amountKobo, string? payLink)
     {
+        if (string.IsNullOrWhiteSpace(customerPhone) || string.IsNullOrWhiteSpace(payLink)) return;
+        var name = string.IsNullOrWhiteSpace(customerName) ? "there" : customerName;
+        await TryWaAsync(customerPhone,
+            $"Hi {name}, you have an InstaSafe payment link for {Money(amountKobo)}:\n{payLink}\n" +
+            "Pay now — your money stays locked in escrow until you confirm delivery.");
+    }
+
+    public async Task OrderCreatedAsync(Order order, string? buyerEmail)    {
         var link = order.PaystackAuthUrl ?? "";
         await TryEmailAsync(buyerEmail, $"Pay for your order ({Money(order.AmountKobo)})",
             $"<p>Hi {order.CustomerName},</p><p>Your order totals <b>{Money(order.AmountKobo)}</b>.</p><p><a href=\"{link}\">Pay securely with InstaSafe</a></p><p>Funds stay in escrow until you confirm delivery.</p>");

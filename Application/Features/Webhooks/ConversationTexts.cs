@@ -11,7 +11,7 @@ public static class ConversationTexts
         "1️⃣ Create escrow link (new order)\n" +
         "2️⃣ Track an order\n" +
         "3️⃣ Help / talk to support\n" +
-        "Reply with 1, 2 or 3. Type MENU anytime to come back here, CANCEL to stop.";
+        "Reply with 1, 2 or 3. Type MENU anytime to come back here, CANCEL to stop, BACK to edit the previous answer.";
 
     public static string MenuWithContinue(int openCount) =>
         "What would you like to do?\n" +
@@ -19,7 +19,7 @@ public static class ConversationTexts
         "2️⃣ Track an order\n" +
         "3️⃣ Help / talk to support\n" +
         $"4️⃣ Continue unfinished order ({openCount} saved)\n" +
-        "Reply with 1, 2, 3 or 4. Type MENU anytime to come back here, CANCEL to stop.";
+        "Reply with 1, 2, 3 or 4. Type MENU anytime to come back here, CANCEL to stop, BACK to edit the previous answer.";
 
     public const string ProgressSaved =
         "I've saved your progress — pick it up anytime with 4. Continue below.";
@@ -36,7 +36,7 @@ public static class ConversationTexts
     public const string DraftLoaded = "Loaded — continuing where you stopped.";
 
     public const string AskCustomerName = "Let's create your escrow link.\nWho is the customer? Reply with the customer's full name.";
-    public const string AskCustomerPhone = "Got it. What is the customer's phone number? (e.g. 08012345678)";
+    public const string AskCustomerPhone = "Got it. What is the customer's phone number? Must be a WhatsApp number (e.g. 08012345678) — the payment link goes there.";
     public const string AskBuyerEmail = "Thanks. What is the buyer's email address? (for the receipt and payment link)";
     public const string AskAddress = "Thanks. What is the delivery address?";
     public const string AskItems =
@@ -105,6 +105,9 @@ public static class ConversationTexts
 
     public static string OrderCreated(long amountKobo, string? paystackAuthUrl) =>
         $"InstaSafe order created ✅\nAmount: ₦{amountKobo / 100:N0}\nPayment link: {paystackAuthUrl}";
+
+    public static string VendorOrderSent(string customerName, long amountKobo) =>
+        $"Order created ✅ for {customerName} (₦{amountKobo / 100:N0}) — payment link sent to them on WhatsApp + email.";
 
     public static string OrderFailed(string error) =>
         $"Sorry, I couldn't create that order: {error}";

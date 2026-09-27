@@ -297,7 +297,7 @@ public class ConversationRouterTests
 
         await Send(phone, "YES");
 
-        Assert.Contains("Payment link", _sender.LastBody);
+        Assert.Contains("Order created", _sender.LastBody);
         Assert.Equal(ConversationStep.Idle, State(phone).Step);
         Assert.Contains(_vendors.Vendors, v =>
             v.Phone == InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone));
@@ -350,7 +350,7 @@ public class ConversationRouterTests
         Assert.Equal("2348055556666", captured.DriverPhone);
         Assert.Equal("0123456789", captured.DriverAccountNumber);
         Assert.Equal("058", captured.DriverBankCode);
-        Assert.Contains("Payment link", _sender.LastBody);
+        Assert.Contains("Order created", _sender.LastBody);
     }
 
     [Fact]
@@ -375,7 +375,7 @@ public class ConversationRouterTests
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
 
         await Send(phone, "YES");
-        Assert.Contains("Payment link", _sender.LastBody);
+        Assert.Contains("Order created", _sender.LastBody);
     }
 
     [Fact]
@@ -483,7 +483,7 @@ public class ConversationRouterTests
         Assert.Contains("unverified", _sender.LastBody);
 
         await Send(phone, "YES");
-        Assert.Contains("Payment link", _sender.LastBody);
+        Assert.Contains("Order created", _sender.LastBody);
     }
 
     [Fact]
@@ -539,6 +539,38 @@ public class ConversationRouterTests
 
         Assert.Contains("doesn't look like a phone number", _sender.LastBody);
         Assert.Equal(ConversationStep.DraftCustomerPhone, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Back_ReturnsToPreviousAnsweredStep()
+    {
+        const string phone = "08010000032";
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
+        Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
+
+        await Send(phone, "BACK");
+
+        Assert.Equal(ConversationStep.DraftBuyerEmail, State(phone).Step);
+        Assert.Contains("buyer email", _sender.LastBody);
+
+        await Send(phone, "other@example.com");
+        Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Back_AtFirstStep_Nudges()
+    {
+        const string phone = "08010000033";
+        await Send(phone, "1");
+        Assert.Equal(ConversationStep.DraftCustomerName, State(phone).Step);
+
+        await Send(phone, "BACK");
+
+        Assert.Equal(ConversationStep.DraftCustomerName, State(phone).Step);
+        Assert.Contains("Nothing to go back to", _sender.LastBody);
     }
 
     [Fact]
@@ -749,7 +781,7 @@ public class ConversationRouterTests
         await Send(phone, "0");
         await Send(phone, "YES");
 
-        Assert.Contains("Payment link", _sender.LastBody);
+        Assert.Contains("Order created", _sender.LastBody);
         var done = _states.Drafts.Where(d => d.Status == DraftTicketStatus.Completed).ToList();
         Assert.Single(done);
         Assert.Equal(orderId, done[0].CompletedOrderId);

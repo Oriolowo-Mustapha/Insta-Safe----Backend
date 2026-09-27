@@ -128,6 +128,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         await _orders.SaveAsync(ct);
 
         await _notifier.OrderCreatedAsync(order, OrderNotifier.IsRealEmail(order.BuyerEmail) ? order.BuyerEmail : null);
+        await _notifier.PaymentLinkAsync(order.CustomerPhone, order.CustomerName, order.AmountKobo, order.PaystackAuthUrl);
         if (order.DriverPhone is not null)
             await _notifier.DriverAssignedAsync(order);
 

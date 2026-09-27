@@ -85,6 +85,11 @@ public class ConversationRouter
                 Domain.Entities.ConversationStep.Idle, ct);
             return true;
         }
+        if (upper is "BACK" or "EDIT")
+        {
+            await HandleBackStepAsync(state, phone, replyTo, ct);
+            return true;
+        }
 
         var draft = OrderDraft.Load(state.DraftJson);
 
@@ -628,8 +633,11 @@ public class ConversationRouter
                 Reset(state);
                 state.Touch();
                 await _states.SaveAsync(ct);
+                // Payment link already went to the CUSTOMER (handler notifies
+                // WhatsApp + email); the vendor just gets confirmation.
                 await SendWithTimeoutAsync(replyTo,
-                    ConversationTexts.OrderCreated(result.Value!.AmountKobo, result.Value.PaystackAuthUrl));
+                    ConversationTexts.VendorOrderSent(
+                        result.Value!.CustomerName, result.Value.AmountKobo));
                 return;
             }
 
@@ -710,6 +718,67 @@ public class ConversationRouter
         }
         return null;
     }
+
+    private async Task HandleBackStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, CancellationToken ct)
+    {
+        var draft = OrderDraft.Load(state.DraftJson);
+        var prev = PreviousStep(state.Step, draft);
+        if (prev is null)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Nothing to go back to — " + PromptFor(state.Step), state.Step, ct);
+            return;
+        }
+        var label = StepLabel(prev.Value);
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            $"Going back — {label}\n\n" + PromptFor(prev.Value), prev.Value, ct, draft);
+    }
+
+    /// <summary>
+    /// Previous ANSWERED step in canonical order, so re-answering flows
+    /// forward again via AdvanceAsync. Null when already at the start.
+    /// </summary>
+    private static Domain.Entities.ConversationStep? PreviousStep(
+        Domain.Entities.ConversationStep current, OrderDraft draft)
+    {
+        var chain = new List<(Domain.Entities.ConversationStep Step, bool Answered)>
+        {
+            (Domain.Entities.ConversationStep.DraftCustomerName, !string.IsNullOrWhiteSpace(draft.CustomerName)),
+            (Domain.Entities.ConversationStep.DraftCustomerPhone, !string.IsNullOrWhiteSpace(draft.CustomerPhone)),
+            (Domain.Entities.ConversationStep.DraftBuyerEmail, !string.IsNullOrWhiteSpace(draft.BuyerEmail)),
+            (Domain.Entities.ConversationStep.DraftAddress, !string.IsNullOrWhiteSpace(draft.Address)),
+            (Domain.Entities.ConversationStep.DraftItems, draft.Items.Count > 0),
+            (Domain.Entities.ConversationStep.DraftAmount, draft.TotalNgn > 0),
+            (Domain.Entities.ConversationStep.DraftDeliveryFee, true),
+            (Domain.Entities.ConversationStep.DraftDriverPhone, !string.IsNullOrWhiteSpace(draft.DriverPhone)),
+            (Domain.Entities.ConversationStep.DraftDriverAccount, !string.IsNullOrWhiteSpace(draft.DriverAccountNumber)),
+            (Domain.Entities.ConversationStep.DraftDriverBankName, !string.IsNullOrWhiteSpace(draft.DriverBankCode)),
+            (Domain.Entities.ConversationStep.DraftDriverConfirm, !string.IsNullOrWhiteSpace(draft.DriverBankCode)),
+            (Domain.Entities.ConversationStep.Confirming, false)
+        };
+        var idx = chain.FindIndex(x => x.Step == current);
+        if (idx < 0) return null;
+        for (var i = idx - 1; i >= 0; i--)
+            if (chain[i].Answered) return chain[i].Step;
+        return null;
+    }
+
+    private static string StepLabel(Domain.Entities.ConversationStep step) => step switch
+    {
+        Domain.Entities.ConversationStep.DraftCustomerName => "customer name",
+        Domain.Entities.ConversationStep.DraftCustomerPhone => "customer phone",
+        Domain.Entities.ConversationStep.DraftBuyerEmail => "buyer email",
+        Domain.Entities.ConversationStep.DraftAddress => "delivery address",
+        Domain.Entities.ConversationStep.DraftItems => "items",
+        Domain.Entities.ConversationStep.DraftAmount => "total amount",
+        Domain.Entities.ConversationStep.DraftDeliveryFee => "delivery fee",
+        Domain.Entities.ConversationStep.DraftDriverPhone => "driver phone",
+        Domain.Entities.ConversationStep.DraftDriverAccount => "driver account",
+        Domain.Entities.ConversationStep.DraftDriverBankName => "driver bank",
+        Domain.Entities.ConversationStep.DraftDriverConfirm => "driver details",
+        _ => "previous question"
+    };
 
     private static void Reset(Domain.Entities.ConversationState state)
     {

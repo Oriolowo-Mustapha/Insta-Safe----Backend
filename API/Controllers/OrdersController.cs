@@ -45,7 +45,7 @@ public class OrdersController : ControllerBase
             return Forbid();
         var result = await _mediator.Send(cmd, ct);
         if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Order created. Share the payment link with the buyer."));
+        return Ok(ApiResponse<OrderDto>.FromResult(result, "Order created. Payment link sent to the customer via WhatsApp and email."));
     }
 
     [HttpPost("parse")]
