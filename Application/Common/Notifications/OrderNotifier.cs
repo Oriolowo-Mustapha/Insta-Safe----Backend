@@ -64,34 +64,40 @@ public class OrderNotifier
 
     private static string Money(long kobo) => $"₦{kobo / 100:N0}";
 
-    public async Task PaymentLinkAsync(string customerPhone, string customerName, long amountKobo, string? payLink)
+    private static string Num(Order order) =>
+        string.IsNullOrWhiteSpace(order.OrderNumber) ? order.Id.ToString()[..8] : order.OrderNumber;
+
+    private static string PayRef(Order order) =>
+        string.IsNullOrWhiteSpace(order.PaystackReference) ? "" : $"\n(Payment ref: {order.PaystackReference})";
+
+    public async Task PaymentLinkAsync(string customerPhone, string customerName, long amountKobo, string? payLink, string orderNumber)
     {
         if (string.IsNullOrWhiteSpace(customerPhone) || string.IsNullOrWhiteSpace(payLink)) return;
         var name = string.IsNullOrWhiteSpace(customerName) ? "there" : customerName;
         await TryWaAsync(customerPhone,
-            $"Hi {name}, you have an InstaSafe payment link for {Money(amountKobo)}:\n{payLink}\n" +
+            $"Hi {name}, order {orderNumber} — your InstaSafe payment link for {Money(amountKobo)}:\n{payLink}\n" +
             "Pay now — your money stays locked in escrow until you confirm delivery.");
     }
 
     public async Task OrderCreatedAsync(Order order, string? buyerEmail)    {
         var link = order.PaystackAuthUrl ?? "";
-        await TryEmailAsync(buyerEmail, $"Pay for your order ({Money(order.AmountKobo)})",
-            $"<p>Hi {order.CustomerName},</p><p>Your order totals <b>{Money(order.AmountKobo)}</b>.</p><p><a href=\"{link}\">Pay securely with InstaSafe</a></p><p>Funds stay in escrow until you confirm delivery.</p>");
+        await TryEmailAsync(buyerEmail, $"Pay for order {Num(order)} ({Money(order.AmountKobo)})",
+            $"<p>Hi {order.CustomerName},</p><p>Your order <b>{Num(order)}</b> totals <b>{Money(order.AmountKobo)}</b>.</p><p><a href=\"{link}\">Pay securely with InstaSafe</a></p><p>Funds stay in escrow until you confirm delivery.</p>{PayRef(order)}");
         await SendVendorEmailAsync(order.VendorId, "New order created",
-            $"<p>Order {order.Id} for <b>{Money(order.AmountKobo)}</b> was created. Share the payment link with your buyer.</p><p>Check your dashboard for full details.</p>");
+            $"<p>Order {Num(order)} for <b>{Money(order.AmountKobo)}</b> was created. Share the payment link with your buyer.</p><p>Check your dashboard for full details.</p>");
     }
 
     public async Task FundsHeldAsync(Order order, string otpCode, string? buyerEmail)
     {
-        await TryEmailAsync(buyerEmail, "Payment received — escrow holding your funds",
-            $"<p>Hi {order.CustomerName},</p><p>We received <b>{Money(order.AmountKobo)}</b> for order {order.Id}.</p><p>Your delivery code is <b>{otpCode}</b>. Share it with the rider only when you receive your item.</p>");
+        await TryEmailAsync(buyerEmail, $"Payment received for order {Num(order)} — escrow holding your funds",
+            $"<p>Hi {order.CustomerName},</p><p>We received <b>{Money(order.AmountKobo)}</b> for order <b>{Num(order)}</b>.</p><p>Your delivery code is <b>{otpCode}</b>. Share it with the rider only when you receive your item.</p>{PayRef(order)}");
     }
 
     public async Task DriverAssignedAsync(Order order)
     {
         if (string.IsNullOrWhiteSpace(order.DriverPhone)) return;
         await TryWaAsync(order.DriverPhone,
-            $"InstaSafe delivery assigned 🚚\nOrder {order.Id}\nDeliver to: {order.DeliveryAddress}\nFee: {Money(order.DeliveryFeeKobo)}\nLog in to the driver portal to confirm on arrival. Check your dashboard for full details.");
+            $"InstaSafe delivery assigned 🚚\nOrder {Num(order)}\nDeliver to: {order.DeliveryAddress}\nFee: {Money(order.DeliveryFeeKobo)}\nLog in to the driver portal to confirm on arrival. Check your dashboard for full details.");
     }
 
     public async Task BankTransferDetailsAsync(Order order)
@@ -99,11 +105,11 @@ public class OrderNotifier
         if (string.IsNullOrWhiteSpace(order.PayVirtualAccountNumber)) return;
         var amount = Money(order.AmountKobo);
         await TryWaAsync(order.CustomerPhone,
-            $"InstaSafe: pay {amount} by bank transfer to complete order {order.Id}:\n" +
+            $"InstaSafe: pay {amount} by bank transfer to complete order {Num(order)}:\n" +
             $"Bank: {order.PayVirtualAccountBank}\nAccount: {order.PayVirtualAccountNumber}\n" +
             $"Name: {order.PayVirtualAccountName}\nTransfer EXACTLY {amount} — your payment is confirmed automatically.");
-        await TryEmailAsync(order.BuyerEmail, $"Bank transfer details for your order ({amount})",
-            $"<p>Hi {order.CustomerName},</p><p>Pay <b>{amount}</b> by bank transfer:</p>" +
+        await TryEmailAsync(order.BuyerEmail, $"Bank transfer details for order {Num(order)} ({amount})",
+            $"<p>Hi {order.CustomerName},</p><p>Pay <b>{amount}</b> by bank transfer for order <b>{Num(order)}</b>:</p>" +
             $"<p>Bank: <b>{order.PayVirtualAccountBank}</b><br/>Account: <b>{order.PayVirtualAccountNumber}</b><br/>Name: {order.PayVirtualAccountName}</p>" +
             $"<p>Transfer exactly {amount} — your payment is confirmed automatically and held in escrow.</p>");
     }
@@ -112,45 +118,45 @@ public class OrderNotifier
     {
         var window = "You have 24 hours to inspect. If anything is wrong, tap Dispute on your order page — otherwise funds release automatically.";
         await TryWaAsync(order.VendorPhone,
-            $"InstaSafe: order {order.Id} marked DELIVERED ✅\n{window}\nCheck your dashboard for full details.");
+            $"InstaSafe: order {Num(order)} marked DELIVERED ✅\n{window}\nCheck your dashboard for full details.");
         await TryWaAsync(order.CustomerPhone,
-            $"InstaSafe: your order arrived ✅\n{window}");
-        await TryEmailAsync(buyerEmail, "Order delivered — 24h inspection window",
-            $"<p>Hi {order.CustomerName},</p><p>Order {order.Id} was marked delivered.</p><p>{window}</p>");
-        await SendVendorEmailAsync(order.VendorId, "Order delivered",
-            $"<p>Order {order.Id} was marked delivered. {window}</p>");
+            $"InstaSafe: your order {Num(order)} arrived ✅\n{window}");
+        await TryEmailAsync(buyerEmail, $"Order {Num(order)} delivered — 24h inspection window",
+            $"<p>Hi {order.CustomerName},</p><p>Order <b>{Num(order)}</b> was marked delivered.</p><p>{window}</p>{PayRef(order)}");
+        await SendVendorEmailAsync(order.VendorId, $"Order {Num(order)} delivered",
+            $"<p>Order <b>{Num(order)}</b> was marked delivered. {window}</p>");
     }
 
     public async Task ReleasedAsync(Order order, string? buyerEmail, string? transferRef)
     {
         var payout = transferRef is null ? "Payout is being processed." : $"Transfer ref: {transferRef}.";
         await TryWaAsync(order.VendorPhone,
-            $"InstaSafe: funds released ✅ {Money(order.AmountKobo)} for order {order.Id}. {payout}\nCheck your dashboard for full details.");
+            $"InstaSafe: funds released ✅ {Money(order.AmountKobo)} for order {Num(order)}. {payout}\nCheck your dashboard for full details.");
         await TryWaAsync(order.CustomerPhone,
-            $"InstaSafe: order {order.Id} is complete. Thanks for buying safe ✅");
-        await TryEmailAsync(buyerEmail, "Order complete — funds released",
-            $"<p>Hi {order.CustomerName},</p><p>Order {order.Id} is complete and the vendor has been paid. {payout}</p>");
-        await SendVendorEmailAsync(order.VendorId, "Funds released",
-            $"<p>{Money(order.AmountKobo)} for order {order.Id} was released. {payout}</p>");
+            $"InstaSafe: order {Num(order)} is complete. Thanks for buying safe ✅");
+        await TryEmailAsync(buyerEmail, $"Order {Num(order)} complete — funds released",
+            $"<p>Hi {order.CustomerName},</p><p>Order <b>{Num(order)}</b> is complete and the vendor has been paid. {payout}</p>{PayRef(order)}");
+        await SendVendorEmailAsync(order.VendorId, $"Funds released for order {Num(order)}",
+            $"<p>{Money(order.AmountKobo)} for order <b>{Num(order)}</b> was released. {payout}</p>");
     }
 
     public async Task RefundedAsync(Order order, string? buyerEmail)
     {
         await TryWaAsync(order.VendorPhone,
-            $"InstaSafe: order {order.Id} was refunded. Check your dashboard for full details.");
+            $"InstaSafe: order {Num(order)} was refunded. Check your dashboard for full details.");
         await TryWaAsync(order.CustomerPhone,
-            $"InstaSafe: order {order.Id} was refunded. Your money is on its way back.");
-        await TryEmailAsync(buyerEmail, "Order refunded",
-            $"<p>Hi {order.CustomerName},</p><p>Order {order.Id} was refunded. Your money is on its way back.</p>");
-        await SendVendorEmailAsync(order.VendorId, "Order refunded",
-            $"<p>Order {order.Id} was refunded to the buyer.</p>");
+            $"InstaSafe: order {Num(order)} was refunded. Your money is on its way back.");
+        await TryEmailAsync(buyerEmail, $"Order {Num(order)} refunded",
+            $"<p>Hi {order.CustomerName},</p><p>Order <b>{Num(order)}</b> was refunded. Your money is on its way back.</p>{PayRef(order)}");
+        await SendVendorEmailAsync(order.VendorId, $"Order {Num(order)} refunded",
+            $"<p>Order <b>{Num(order)}</b> was refunded to the buyer.</p>");
     }
 
     public async Task DisputeFiledAsync(Order order, string reason)
     {
         await TryWaAsync(order.VendorPhone,
-            $"InstaSafe: buyer disputed order {order.Id} ⚠️\nReason: {reason}\nFunds are frozen. Resolve it on your dashboard.");
-        await SendVendorEmailAsync(order.VendorId, "Order disputed",
-            $"<p>Buyer disputed order {order.Id}.</p><p>Reason: {reason}</p><p>Funds are frozen until you resolve it.</p>");
+            $"InstaSafe: buyer disputed order {Num(order)} ⚠️\nReason: {reason}\nFunds are frozen. Resolve it on your dashboard.");
+        await SendVendorEmailAsync(order.VendorId, $"Order {Num(order)} disputed",
+            $"<p>Buyer disputed order <b>{Num(order)}</b>.</p><p>Reason: {reason}</p><p>Funds are frozen until you resolve it.</p>");
     }
 }

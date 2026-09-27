@@ -634,7 +634,7 @@ public class ConversationRouter
                 // WhatsApp + email); the vendor just gets confirmation.
                 await SendWithTimeoutAsync(replyTo,
                     ConversationTexts.VendorOrderSent(
-                        result.Value!.CustomerName, result.Value.AmountKobo));
+                        result.Value!.OrderNumber, result.Value.CustomerName, result.Value.AmountKobo));
                 return;
             }
 
@@ -675,6 +675,7 @@ public class ConversationRouter
         Domain.Entities.Order? order = null;
         if (Guid.TryParse(refTrimmed, out var id))
             order = await _orders.GetByIdAsync(id, ct);
+        order ??= await _orders.GetByOrderNumberAsync(refTrimmed.ToUpperInvariant(), ct);
         order ??= await _orders.GetByPaystackRefAsync(refTrimmed, ct);
 
         if (order is null)
@@ -686,7 +687,8 @@ public class ConversationRouter
             return;
         }
 
-        var displayRef = order.PaystackReference ?? order.Id.ToString();
+        var displayRef = !string.IsNullOrWhiteSpace(order.OrderNumber)            ? order.OrderNumber
+            : order.PaystackReference ?? order.Id.ToString();
         Reset(state);
         state.Touch();
         await _states.SaveAsync(ct);

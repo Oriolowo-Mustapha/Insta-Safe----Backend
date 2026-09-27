@@ -95,8 +95,11 @@ public static class ConversationTexts
     public static string OrderCreated(long amountKobo, string? paystackAuthUrl) =>
         $"InstaSafe order created ✅\nAmount: ₦{amountKobo / 100:N0}\nPayment link: {paystackAuthUrl}";
 
-    public static string VendorOrderSent(string customerName, long amountKobo) =>
-        $"Order created ✅ for {customerName} (₦{amountKobo / 100:N0}) — payment link sent to them on WhatsApp + email.";
+    public static string VendorOrderSent(string orderNumber, string customerName, long amountKobo)
+    {
+        var prefix = string.IsNullOrWhiteSpace(orderNumber) ? "Order" : $"Order {orderNumber}";
+        return $"{prefix} created ✅ for {customerName} (₦{amountKobo / 100:N0}) — payment link sent to them on WhatsApp + email.";
+    }
 
     public static string OrderFailed(string error) =>
         $"Sorry, I couldn't create that order: {error}";

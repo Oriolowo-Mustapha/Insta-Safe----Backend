@@ -73,6 +73,8 @@ public class ConversationRouterTests
             => Task.FromResult(Orders.FirstOrDefault(o => o.Id == id));
         public Task<Order?> GetByPaystackRefAsync(string reference, CancellationToken ct)
             => Task.FromResult(Orders.FirstOrDefault(o => o.PaystackReference == reference));
+        public Task<Order?> GetByOrderNumberAsync(string orderNumber, CancellationToken ct)
+            => Task.FromResult(Orders.FirstOrDefault(o => o.OrderNumber == orderNumber));
         public Task AddAsync(Order order, CancellationToken ct)
         {
             Orders.Add(order);
@@ -794,3 +796,4 @@ public class ConversationRouterTests
         Assert.Single(_states.Drafts, d => d.Status == DraftTicketStatus.Open);
     }
 }
+

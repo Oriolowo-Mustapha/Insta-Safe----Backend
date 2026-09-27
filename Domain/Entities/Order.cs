@@ -14,6 +14,7 @@ public class Order : BaseEntity
 {
     public Guid? VendorId { get; set; }
     public Vendor? Vendor { get; set; }
+    public string OrderNumber { get; set; } = string.Empty;
     public string VendorPhone { get; set; } = string.Empty;
     public string CustomerName { get; set; } = string.Empty;
     public string CustomerPhone { get; set; } = string.Empty;

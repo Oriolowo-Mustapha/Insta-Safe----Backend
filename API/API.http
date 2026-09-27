@@ -127,14 +127,14 @@ Authorization: Bearer YOUR_JWT_HERE
 
 ###
 
-### Guest example: track order by reference (no auth)
-GET {{InstaSafe_HostAddress}}/api/orders/by-reference/ref-123
+### Guest example: track order by NUMBER, reference or id (no auth)
+GET {{InstaSafe_HostAddress}}/api/orders/by-reference/IS-8K4N2Q
 Accept: application/json
 
 ###
 
 ### Guest: customer order timeline (no auth)
-GET {{InstaSafe_HostAddress}}/api/orders/by-reference/ref-123/timeline
+GET {{InstaSafe_HostAddress}}/api/orders/by-reference/IS-8K4N2Q/timeline
 Accept: application/json
 
 ###

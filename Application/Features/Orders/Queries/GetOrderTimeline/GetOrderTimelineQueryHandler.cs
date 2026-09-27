@@ -18,6 +18,7 @@ public class GetOrderTimelineQueryHandler : IRequestHandler<GetOrderTimelineQuer
         Domain.Entities.Order? order = null;
         if (Guid.TryParse(reference, out var id))
             order = await _orders.GetByIdAsync(id, ct);
+        order ??= await _orders.GetByOrderNumberAsync(reference.ToUpperInvariant(), ct);
         order ??= await _orders.GetByPaystackRefAsync(reference, ct);
         if (order is null)
             return Result<OrderTimelineDto>.Failure("Order not found.");
@@ -52,7 +53,9 @@ public class GetOrderTimelineQueryHandler : IRequestHandler<GetOrderTimelineQuer
 
         return Result<OrderTimelineDto>.Success(new OrderTimelineDto(
             order.Id,
-            order.PaystackReference ?? order.Id.ToString(),
+            string.IsNullOrWhiteSpace(order.OrderNumber)
+                ? order.PaystackReference ?? order.Id.ToString()
+                : order.OrderNumber,
             order.Status.ToString(),
             order.AmountKobo,
             events));

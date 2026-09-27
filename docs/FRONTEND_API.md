@@ -35,6 +35,12 @@ Authorization: Bearer <jwt>
 All amounts in DTOs are **kobo** (`amountKobo`, `deliveryFeeKobo`). Display naira = value / 100.
 Order creation takes **naira** (`amountNgn`, `deliveryFeeNgn`). Buyer is charged `amountNgn + deliveryFeeNgn`.
 
+### Order numbers vs payment references
+Every order gets a stable customer-facing number on creation: `IS-XXXXXX` (6 unambiguous chars, e.g. `IS-8K4N2Q`). Use it **everywhere** buyer-facing — tracker, WhatsApp, emails, receipts screen.
+- Lookup endpoints accept **order id, order number (any case), or Paystack reference** — old links keep working.
+- `OrderDto.orderNumber` + timeline `reference` carry the number; `paystackReference` stays for the details section ("Payment ref" for receipt matching).
+- Internally (refunds, verification, DVA matching) the Paystack reference rules — untouched.
+
 ### Phone numbers
 Nigerian mobiles, canonical `234...` form everywhere. The API normalizes `080...`/`+234...`/`234...` automatically, but **validate client-side**: 11 digits starting `070/080/081/090/091` (or `234` + 10 digits). Anything else → `400 "must be a valid Nigerian mobile number"`. Store and display the `234...` form the API returns.
 

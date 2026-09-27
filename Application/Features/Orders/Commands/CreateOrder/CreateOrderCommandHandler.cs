@@ -60,7 +60,8 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
             Currency = "NGN",
             Status = OrderStatus.AwaitingPayment,
             Fulfillment = req.Fulfillment,
-            DeliveryFeeKobo = req.Fulfillment == FulfillmentType.Digital ? 0 : req.DeliveryFeeNgn * 100
+            DeliveryFeeKobo = req.Fulfillment == FulfillmentType.Digital ? 0 : req.DeliveryFeeNgn * 100,
+            OrderNumber = await NextOrderNumberAsync(ct)
         };
 
         if (string.IsNullOrWhiteSpace(order.VendorPhone))
@@ -118,8 +119,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
 
         await _orders.AddAsync(order, ct);
 
-        var (reference, authUrl) = await _paystack.InitializeTransactionAsync(req.BuyerEmail!, order.AmountKobo, order.Id, ct);
-        order.PaystackReference = reference;
+        var (reference, authUrl) = await _paystack.InitializeTransactionAsync(req.BuyerEmail!, order.AmountKobo, order.Id, ct);        order.PaystackReference = reference;
         order.PaystackAuthUrl = authUrl;
         order.Status = OrderStatus.AwaitingPayment;
         order.Touch();
@@ -128,10 +128,21 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         await _orders.SaveAsync(ct);
 
         await _notifier.OrderCreatedAsync(order, OrderNotifier.IsRealEmail(order.BuyerEmail) ? order.BuyerEmail : null);
-        await _notifier.PaymentLinkAsync(order.CustomerPhone, order.CustomerName, order.AmountKobo, order.PaystackAuthUrl);
+        await _notifier.PaymentLinkAsync(order.CustomerPhone, order.CustomerName, order.AmountKobo, order.PaystackAuthUrl, order.OrderNumber);
         if (order.DriverPhone is not null)
             await _notifier.DriverAssignedAsync(order);
 
         return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
+    }
+
+    private async Task<string> NextOrderNumberAsync(CancellationToken ct)
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            var candidate = OrderNumberGenerator.Generate();
+            if (await _orders.GetByOrderNumberAsync(candidate, ct) is null)
+                return candidate;
+        }
+        return OrderNumberGenerator.Generate();
     }
 }

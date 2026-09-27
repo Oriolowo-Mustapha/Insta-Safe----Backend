@@ -22,6 +22,7 @@ public class GetOrderByReferenceQueryHandler : IRequestHandler<GetOrderByReferen
         Domain.Entities.Order? order = null;
         if (Guid.TryParse(reference, out var id))
             order = await _orders.GetByIdAsync(id, ct);
+        order ??= await _orders.GetByOrderNumberAsync(reference.ToUpperInvariant(), ct);
         order ??= await _orders.GetByPaystackRefAsync(reference, ct);
         if (order is null)
             return Result<OrderDto>.Failure("Order not found.");

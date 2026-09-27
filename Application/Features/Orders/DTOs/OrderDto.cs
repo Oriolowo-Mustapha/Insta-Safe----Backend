@@ -8,8 +8,7 @@ public sealed record OrderDto(
     string DeliveryAddress, List<OrderItemDto> Items, long AmountKobo, string Currency,
     OrderStatus Status, string? PaystackReference, string? PaystackAuthUrl,
     DateTimeOffset? HeldAt, DateTimeOffset? ReleasedAt, string? TransferReference,
-    string? RefundReference = null,
-    FulfillmentType Fulfillment = FulfillmentType.Dispatch,
+    string? RefundReference = null,    FulfillmentType Fulfillment = FulfillmentType.Dispatch,
     long DeliveryFeeKobo = 0,
     string? DriverPhone = null,
     string? DriverTransferReference = null,
@@ -18,4 +17,5 @@ public sealed record OrderDto(
     string? DisputeReason = null,
     string? PayVirtualAccountNumber = null,
     string? PayVirtualAccountBank = null,
-    string? BuyerEmail = null);
+    string? BuyerEmail = null,
+    string OrderNumber = "");

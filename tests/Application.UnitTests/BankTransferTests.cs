@@ -156,6 +156,8 @@ public class BankTransferTests : IDisposable
             => _db.Orders.FirstOrDefaultAsync(o => o.Id == id, ct)!;
         public Task<Order?> GetByPaystackRefAsync(string reference, CancellationToken ct)
             => _db.Orders.FirstOrDefaultAsync(o => o.PaystackReference == reference, ct)!;
+        public Task<Order?> GetByOrderNumberAsync(string orderNumber, CancellationToken ct)
+            => _db.Orders.FirstOrDefaultAsync(o => o.OrderNumber == orderNumber, ct)!;
         public Task<List<Order>> ListAsync(int page, int pageSize, CancellationToken ct)
             => _db.Orders.ToListAsync(ct);
         public Task<List<Order>> ListByVendorAsync(Guid vendorId, string vendorPhone, int page, int pageSize, CancellationToken ct)
@@ -275,3 +277,4 @@ public class BankTransferTests : IDisposable
         Assert.False(result.IsSuccess);
     }
 }
+

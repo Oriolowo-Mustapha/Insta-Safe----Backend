@@ -100,6 +100,8 @@ public class AppDbContext : DbContext, IAppDbContext
         b.Entity<Order>(e =>
         {
             e.HasKey(x => x.Id);
+            e.Property(x => x.OrderNumber).HasMaxLength(20).IsRequired();
+            e.HasIndex(x => x.OrderNumber).IsUnique();
             e.HasOne(x => x.Vendor).WithMany().HasForeignKey(x => x.VendorId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Driver).WithMany().HasForeignKey(x => x.DriverId).OnDelete(DeleteBehavior.Restrict);
             e.Property(x => x.DriverPhone).HasMaxLength(20);

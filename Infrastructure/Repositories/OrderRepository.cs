@@ -19,6 +19,9 @@ public class OrderRepository : IOrderRepository
     public Task<Order?> GetByPaystackRefAsync(string reference, CancellationToken ct)
         => _db.Orders.FirstOrDefaultAsync(o => o.PaystackReference == reference, ct)!;
 
+    public Task<Order?> GetByOrderNumberAsync(string orderNumber, CancellationToken ct)
+        => _db.Orders.FirstOrDefaultAsync(o => o.OrderNumber == orderNumber, ct)!;
+
     public Task<List<Order>> ListUnpaidByEmailAsync(string email, CancellationToken ct)
         => _db.Orders.AsNoTracking()
             .Where(o => (o.Status == Domain.Enums.OrderStatus.AwaitingPayment || o.Status == Domain.Enums.OrderStatus.Draft)
