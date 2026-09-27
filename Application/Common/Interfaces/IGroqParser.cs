@@ -4,6 +4,7 @@ public interface IGroqParser
 {
     Task<ParsedOrder> ParseOrderTextAsync(string rawText, CancellationToken ct);
     Task<ChatIntent> ClassifyIntentAsync(string rawText, CancellationToken ct);
+    Task<string> ChatReplyAsync(string rawText, CancellationToken ct);
 }
 
 public enum ChatIntentKind
@@ -14,7 +15,9 @@ public enum ChatIntentKind
     CreateOrder = 3,
     TrackOrder = 4,
     Help = 5,
-    Cancel = 6
+    Cancel = 6,
+    ListOrders = 7,
+    Chitchat = 8
 }
 
 public sealed record ChatIntent(ChatIntentKind Kind, int? MenuOption, string? TrackReference);

@@ -69,14 +69,14 @@ public class GroqParser : IGroqParser
 
     public async Task<ChatIntent> ClassifyIntentAsync(string rawText, CancellationToken ct)
     {
-        const string schemaHint = """{"intent":"greeting|menu_select|create_order|track_order|help|cancel|unknown","menu_option":1,"track_reference":"string or empty"}""";
+        const string schemaHint = """{"intent":"greeting|menu_select|create_order|track_order|list_orders|chitchat|help|cancel|unknown","menu_option":1,"track_reference":"string or empty"}""";
         var body = new
         {
             model = _opts.Model,
             response_format = new { type = "json_object" },
             messages = new object[]
             {
-                new { role = "system", content = "You route WhatsApp messages for InstaSafe, a Nigerian escrow service. Reply with JSON only, matching " + schemaHint + ". Examples: 'hi' -> greeting. '1'/'2'/'3'/'4' -> menu_select with that menu_option (4 = continue an unfinished order). '2 sneakers for Chidi, 08012345678, Lekki, 45000' -> create_order. 'where is my order ref-123' -> track_order with track_reference 'ref-123'. 'help'/'support' -> help. 'cancel'/'stop' -> cancel. Anything else -> unknown." },
+                new { role = "system", content = "You route WhatsApp messages for InstaSafe, a Nigerian escrow service. Reply with JSON only, matching " + schemaHint + ". Examples: 'hi'/'hello'/'good morning' -> greeting. '1'/'2'/'3'/'4' -> menu_select with that menu_option (4 = continue an unfinished order). '2 sneakers for Chidi, 08012345678, Lekki, 45000' -> create_order. 'where is my order ref-123'/'track IS-8K4N2Q' -> track_order with track_reference. 'list all my orders'/'show my orders'/'i dunno the reference just list my orders' -> list_orders. 'thanks'/'thank you'/'lol'/'how far'/'wetin dey'/'abeg'/'good evening o' -> chitchat. 'help'/'support'/'i need help' -> help. 'cancel'/'stop' -> cancel. Anything else -> unknown." },
                 new { role = "user", content = rawText }
             },
             temperature = 0
@@ -115,6 +115,8 @@ public class GroqParser : IGroqParser
                     "menu_select" => ChatIntentKind.MenuSelect,
                     "create_order" => ChatIntentKind.CreateOrder,
                     "track_order" => ChatIntentKind.TrackOrder,
+                    "list_orders" => ChatIntentKind.ListOrders,
+                    "chitchat" => ChatIntentKind.Chitchat,
                     "help" => ChatIntentKind.Help,
                     "cancel" => ChatIntentKind.Cancel,
                     _ => ChatIntentKind.Unknown
@@ -129,6 +131,33 @@ public class GroqParser : IGroqParser
             {
                 return fallback();
             }
+        }
+    }
+
+    public async Task<string> ChatReplyAsync(string rawText, CancellationToken ct)
+    {
+        var body = new
+        {
+            model = _opts.Model,
+            messages = new object[]
+            {
+                new { role = "system", content = "You are InstaSafe's friendly WhatsApp assistant for Nigerian vendors (escrow for social commerce). Reply in 1-2 short sentences, warm Nigerian English, light pidgin OK when the user uses it. NEVER claim any action was taken, never invent order details, amounts, or links. For anything about orders, money, or help, end with: type MENU to see options." },
+                new { role = "user", content = rawText }
+            },
+            temperature = 0.7,
+            max_tokens = 120
+        };
+        try
+        {
+            var res = await _http.PostAsJsonAsync("chat/completions", body, ct);
+            if (!res.IsSuccessStatusCode) return "";
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+            return doc.RootElement.GetProperty("choices")[0]
+                .GetProperty("message").GetProperty("content").GetString()?.Trim() ?? "";
+        }
+        catch
+        {
+            return "";
         }
     }
 }

@@ -150,7 +150,7 @@ public class ConversationRouter
                 await HandleConfirmStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.AwaitingTrackRef:
-                await LookupAndReplyTrackAsync(state, phone, replyTo, text, ct);
+                await HandleTrackStepAsync(state, phone, replyTo, text, ct);
                 break;
         }
 
@@ -195,6 +195,18 @@ public class ConversationRouter
             intent = new ChatIntent(ChatIntentKind.Unknown, null, null);
         }
 
+        await HandleIntentAsync(state, phone, replyTo, intent, text, ct);
+    }
+
+    /// <summary>
+    /// Shared intent executor used from menu states and from the track-step
+    /// pre-check. List/chitchat replies preserve the current step so an
+    /// interrupted flow (e.g. tracking) continues where it stopped.
+    /// </summary>
+    private async Task HandleIntentAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo,
+        ChatIntent intent, string text, CancellationToken ct)
+    {
         switch (intent.Kind)
         {
             case ChatIntentKind.Greeting:
@@ -215,12 +227,18 @@ public class ConversationRouter
                     await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskTrackRef,
                         Domain.Entities.ConversationStep.AwaitingTrackRef, ct);
                 break;
+            case ChatIntentKind.ListOrders:
+                await ReplyOwnOrdersAsync(state, phone, replyTo, ct);
+                break;
+            case ChatIntentKind.Chitchat:
+                await ReplyChitchatAsync(state, phone, replyTo, text, ct);
+                break;
             case ChatIntentKind.Help:
                 await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Help,
                     Domain.Entities.ConversationStep.Idle, ct);
                 break;
             case ChatIntentKind.Cancel:
-                Reset(state);
+                await PersistAndResetAsync(state, ct);
                 await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Cancelled,
                     Domain.Entities.ConversationStep.Idle, ct);
                 break;
@@ -230,6 +248,47 @@ public class ConversationRouter
                     Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
                 break;
         }
+    }
+
+    private async Task ReplyOwnOrdersAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, CancellationToken ct)
+    {
+        var orders = await _orders.ListByVendorAsync(Guid.Empty, phone, 1, 5, ct);
+        if (orders.Count == 0)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "You have no orders yet. Reply 1 to create your first escrow link.",
+                state.Step, ct);
+            return;
+        }
+        var lines = orders.Select((o, i) =>
+        {
+            var num = !string.IsNullOrWhiteSpace(o.OrderNumber) ? o.OrderNumber
+                : o.PaystackReference ?? o.Id.ToString();
+            return $"{i + 1}. {num} — {o.Status} — ₦{o.AmountKobo / 100:N0}";
+        });
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            "Your recent orders:\n" + string.Join("\n", lines) +
+            "\nSend a reference for details.",
+            state.Step, ct);
+    }
+
+    private async Task ReplyChitchatAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
+    {
+        string reply;
+        try
+        {
+            reply = await _parser.ChatReplyAsync(text, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Chitchat reply failed");
+            reply = "";
+        }
+        if (string.IsNullOrWhiteSpace(reply))
+            reply = "Noted 👍 Type MENU to see what I can do for you.";
+        await ReplyAndSaveAsync(state, phone, replyTo, reply, state.Step, ct);
     }
 
     private async Task ShowDraftListAsync(
@@ -710,15 +769,64 @@ public class ConversationRouter
         }
     }
 
-    private async Task LookupAndReplyTrackAsync(
-        Domain.Entities.ConversationState state, string phone, string replyTo, string reference, CancellationToken ct)
+    /// <summary>
+    /// Track step: a real reference tracks immediately (no AI cost);
+    /// anything else is understood first (list my orders, chitchat, …).
+    /// </summary>
+    private async Task HandleTrackStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
     {
+        var order = await FindOrderAsync(text.Trim(), ct);
+        if (order is not null)
+        {
+            await SendTrackFoundAsync(state, phone, replyTo, order, ct);
+            return;
+        }
+
+        ChatIntent intent;
+        try
+        {
+            intent = await _parser.ClassifyIntentAsync(text, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Track-step classification failed");
+            intent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        }
+        await HandleIntentAsync(state, phone, replyTo, intent, text, ct);
+    }
+
+    private async Task<Domain.Entities.Order?> FindOrderAsync(string reference, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(reference)) return null;
         var refTrimmed = reference.Trim();
         Domain.Entities.Order? order = null;
         if (Guid.TryParse(refTrimmed, out var id))
             order = await _orders.GetByIdAsync(id, ct);
         order ??= await _orders.GetByOrderNumberAsync(refTrimmed.ToUpperInvariant(), ct);
         order ??= await _orders.GetByPaystackRefAsync(refTrimmed, ct);
+        return order;
+    }
+
+    private async Task SendTrackFoundAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo,
+        Domain.Entities.Order order, CancellationToken ct)
+    {
+        var displayRef = !string.IsNullOrWhiteSpace(order.OrderNumber)
+            ? order.OrderNumber
+            : order.PaystackReference ?? order.Id.ToString();
+        Reset(state);
+        state.Touch();
+        await _states.SaveAsync(ct);
+        await SendWithTimeoutAsync(replyTo,
+            ConversationTexts.TrackResult(displayRef, order.Status.ToString(), order.AmountKobo));
+    }
+
+    private async Task LookupAndReplyTrackAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string reference, CancellationToken ct)
+    {
+        var refTrimmed = reference.Trim();
+        var order = await FindOrderAsync(refTrimmed, ct);
 
         if (order is null)
         {
@@ -729,13 +837,7 @@ public class ConversationRouter
             return;
         }
 
-        var displayRef = !string.IsNullOrWhiteSpace(order.OrderNumber)            ? order.OrderNumber
-            : order.PaystackReference ?? order.Id.ToString();
-        Reset(state);
-        state.Touch();
-        await _states.SaveAsync(ct);
-        await SendWithTimeoutAsync(replyTo,
-            ConversationTexts.TrackResult(displayRef, order.Status.ToString(), order.AmountKobo));
+        await SendTrackFoundAsync(state, phone, replyTo, order, ct);
     }
 
     /// <summary>

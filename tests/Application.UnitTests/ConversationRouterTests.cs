@@ -95,10 +95,14 @@ public class ConversationRouterTests
     {
         public ChatIntent NextIntent { get; set; } = new(ChatIntentKind.Unknown, null, null);
         public ParsedOrder NextParsed { get; set; } = new("", "", "", new List<ParsedItem>(), 0);
+        public string NextChatReply { get; set; } = "You are most welcome! 🎉";
+        public bool FailChatReply { get; set; }
         public Task<ChatIntent> ClassifyIntentAsync(string rawText, CancellationToken ct)
             => Task.FromResult(NextIntent);
         public Task<ParsedOrder> ParseOrderTextAsync(string rawText, CancellationToken ct)
             => Task.FromResult(NextParsed);
+        public Task<string> ChatReplyAsync(string rawText, CancellationToken ct)
+            => FailChatReply ? throw new HttpRequestException("groq down") : Task.FromResult(NextChatReply);
     }
 
     private sealed class FakeSender : IWhatsAppSender
@@ -528,12 +532,132 @@ public class ConversationRouterTests
     public async Task TrackUnknownRef_RepliesNotFound()
     {
         const string phone = "08010000008";
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.TrackOrder, null, "ref-nope");
         await Send(phone, "2");
         Assert.Equal(ConversationStep.AwaitingTrackRef, State(phone).Step);
 
         await Send(phone, "ref-nope");
 
         Assert.Contains("couldn't find", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task TrackStep_ValidRef_TracksWithoutAI()
+    {
+        const string phone = "08010000060";
+        SeedVendor(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-ABCDEF",
+            VendorPhone = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone),
+            CustomerName = "Chidi",
+            CustomerPhone = "0802",
+            DeliveryAddress = "Lekki",
+            AmountKobo = 4500000,
+            Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "is-abcdef");
+
+        Assert.Contains("IS-ABCDEF", _sender.LastBody);
+        Assert.Contains("Held", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task TrackStep_FreeText_ListsMyOrders()
+    {
+        const string phone = "08010000061";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-111111", VendorPhone = norm, CustomerName = "A",
+            CustomerPhone = "0802", DeliveryAddress = "X", AmountKobo = 100000,
+            Status = OrderStatus.Held
+        });
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-222222", VendorPhone = norm, CustomerName = "B",
+            CustomerPhone = "0803", DeliveryAddress = "Y", AmountKobo = 200000,
+            Status = OrderStatus.AwaitingPayment
+        });
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-999999", VendorPhone = "2348099999999", CustomerName = "Stranger",
+            CustomerPhone = "0804", DeliveryAddress = "Z", AmountKobo = 300000,
+            Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.ListOrders, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "i dunno the order refrece just list all the orders i have");
+
+        Assert.Contains("IS-111111", _sender.LastBody);
+        Assert.Contains("IS-222222", _sender.LastBody);
+        Assert.DoesNotContain("IS-999999", _sender.LastBody);
+        Assert.Equal(ConversationStep.AwaitingTrackRef, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Menu_ListOrdersIntent_Lists()
+    {
+        const string phone = "08010000062";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-333333", VendorPhone = norm, CustomerName = "C",
+            CustomerPhone = "0805", DeliveryAddress = "W", AmountKobo = 50000,
+            Status = OrderStatus.Released
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.ListOrders, null, null);
+
+        await Send(phone, "show me my orders");
+
+        Assert.Contains("IS-333333", _sender.LastBody);
+        Assert.Contains("Released", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Menu_Chitchat_GetsWarmReply_KeepsStep()
+    {
+        const string phone = "08010000063";
+        SeedVendor(phone);
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Chitchat, null, null);
+        _parser.NextChatReply = "You are most welcome! 🎉 Anything else?";
+
+        await Send(phone, "thanks dear");
+
+        Assert.Contains("welcome", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Menu_ChitchatFailure_FallsBack()
+    {
+        const string phone = "08010000064";
+        SeedVendor(phone);
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Chitchat, null, null);
+        _parser.FailChatReply = true;
+
+        await Send(phone, "lol");
+
+        Assert.Contains("MENU", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Cancel_MidDraft_PreservesTicket()
+    {
+        const string phone = "08010000065";
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+
+        await Send(phone, "CANCEL");
+
+        Assert.Contains("Cancelled", _sender.LastBody);
+        Assert.Single(_states.Drafts.Where(d => d.Status == DraftTicketStatus.Open));
     }
 
     [Fact]
