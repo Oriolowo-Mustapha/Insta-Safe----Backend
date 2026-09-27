@@ -284,6 +284,8 @@ public class ConversationRouterTests
         await Send(phone, "Lekki Phase 1");
         Assert.Equal(ConversationStep.DraftItems, State(phone).Step);
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        await Send(phone, "1");
         Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
         await Send(phone, "0");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
@@ -319,6 +321,8 @@ public class ConversationRouterTests
         await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki Phase 1");
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        await Send(phone, "1");
         Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
 
         await Send(phone, "5000");
@@ -364,6 +368,8 @@ public class ConversationRouterTests
         await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        await Send(phone, "1");
         await Send(phone, "5000");
         await Send(phone, "skip");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
@@ -386,6 +392,8 @@ public class ConversationRouterTests
         await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        await Send(phone, "1");
         await Send(phone, "0");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
 
@@ -413,6 +421,8 @@ public class ConversationRouterTests
         await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        await Send(phone, "1");
         Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
         await Send(phone, "5000");
         Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
@@ -441,6 +451,8 @@ public class ConversationRouterTests
         await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        await Send(phone, "1");
         await Send(phone, "5000");
         await Send(phone, "08055556666");
         await Send(phone, "0123456789");
@@ -467,6 +479,8 @@ public class ConversationRouterTests
         await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        await Send(phone, "1");
         await Send(phone, "5000");
         await Send(phone, "08055556666");
         await Send(phone, "0123456789");
@@ -568,6 +582,61 @@ public class ConversationRouterTests
     }
 
     [Fact]
+    public async Task Fulfillment_Digital_SkipsFeeAndDriver()
+    {
+        const string phone = "08010000040";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Ebook", 1, 5000) }, 5000);
+        CreateOrderCommand? captured = null;
+        _mediator.OnCreateOrder = cmd =>
+        {
+            captured = cmd;
+            return Result<OrderDto>.Success(new OrderDto(
+                Guid.NewGuid(), cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
+                cmd.DeliveryAddress, new(), 5000000, "NGN", OrderStatus.AwaitingPayment,
+                "ref-1", "https://pay.test/ref-1", null, null, null));
+        };
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
+        await Send(phone, "Email delivery");
+        await Send(phone, "1x Ebook @5000");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        Assert.Contains("dispatch rider", _sender.LastBody);
+
+        await Send(phone, "2");
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+        Assert.Contains("digital", _sender.LastBody);
+
+        await Send(phone, "YES");
+
+        Assert.NotNull(captured);
+        Assert.Equal(FulfillmentType.Digital, captured!.Fulfillment);
+        Assert.Equal(0, captured.DeliveryFeeNgn);
+        Assert.Contains("Order created", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Fulfillment_Garbage_Reasks()
+    {
+        const string phone = "08010000041";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Ebook", 1, 5000) }, 5000);
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
+        await Send(phone, "Email delivery");
+        await Send(phone, "1x Ebook @5000");
+
+        await Send(phone, "maybe");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+    }
+
+    [Fact]
     public async Task Reply_UsesSenderJid_NotReconstructedCus()
     {
         SeedVendor("08010000010");
@@ -642,7 +711,7 @@ public class ConversationRouterTests
     {
         var draft = new OrderDraft("Chidi", "0801", "Lekki",
             new List<DraftItem> { new("Sneakers", 2, 22500) }, 45000,
-            BuyerEmail: "chidi@example.com");
+            BuyerEmail: "chidi@example.com", Fulfillment: FulfillmentType.Dispatch);
         var loaded = OrderDraft.Load(draft.Save());
         Assert.True(loaded.IsComplete());
         Assert.Equal("Chidi", loaded.CustomerName);
@@ -666,7 +735,8 @@ public class ConversationRouterTests
         SeedVendor(phone);
         var draft = new OrderDraft("Chidi", "2348028613918", "No 15 Ajangbohun",
             new List<DraftItem> { new("Abaya", 2, 40000) }, 83000, 3000,
-            "2347088201223", "1043626025", "058", "Guaranty Trust Bank", "Musa Rider", "");
+            "2347088201223", "1043626025", "058", "Guaranty Trust Bank", "Musa Rider", "",
+            Fulfillment: FulfillmentType.Dispatch);
         _states.Store[InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone)] =
             new ConversationState
             {
@@ -770,6 +840,8 @@ public class ConversationRouterTests
         await WalkToAddressStep(phone);
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
+        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        await Send(phone, "1");
         await Send(phone, "0");
         await Send(phone, "YES");
 

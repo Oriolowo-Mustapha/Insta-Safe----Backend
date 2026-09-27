@@ -1,3 +1,4 @@
+using InstaSafe.Domain.Enums;
 using System.Text.Json;
 
 namespace InstaSafe.Application.Features.Webhooks;
@@ -16,7 +17,8 @@ public sealed record OrderDraft(
     string DriverBankCode = "",
     string DriverBankName = "",
     string DriverHolderName = "",
-    string BuyerEmail = "")
+    string BuyerEmail = "",
+    FulfillmentType? Fulfillment = null)
 {
     public static OrderDraft Empty() => new("", "", "", new List<DraftItem>(), 0);
 
@@ -46,6 +48,7 @@ public sealed record OrderDraft(
         if (string.IsNullOrWhiteSpace(Address)) missing.Add("delivery address");
         if (Items.Count == 0) missing.Add("items");
         if (TotalNgn <= 0) missing.Add("total amount");
+        if (Fulfillment is null) missing.Add("delivery type");
         if (WantsDispatch)
         {
             if (string.IsNullOrWhiteSpace(DriverPhone)) missing.Add("driver phone");

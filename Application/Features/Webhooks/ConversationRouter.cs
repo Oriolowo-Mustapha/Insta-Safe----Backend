@@ -128,6 +128,9 @@ public class ConversationRouter
             case Domain.Entities.ConversationStep.DraftAmount:
                 await HandleAmountStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
+            case Domain.Entities.ConversationStep.DraftFulfillment:
+                await HandleFulfillmentStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
             case Domain.Entities.ConversationStep.DraftDeliveryFee:
                 await HandleFeeStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
@@ -391,8 +394,8 @@ public class ConversationRouter
         if (parsed.TotalNgn > 0) draft = draft with { TotalNgn = parsed.TotalNgn };
 
         if (draft.TotalNgn > 0)
-            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDeliveryFee,
-                Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskFulfillment,
+                Domain.Entities.ConversationStep.DraftFulfillment, ct, draft);
         else
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskAmount,
                 Domain.Entities.ConversationStep.DraftAmount, ct, draft);
@@ -405,8 +408,8 @@ public class ConversationRouter
         if (long.TryParse(digits, out var amount) && amount > 0)
         {
             draft = draft with { TotalNgn = amount };
-            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDeliveryFee,
-                Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskFulfillment,
+                Domain.Entities.ConversationStep.DraftFulfillment, ct, draft);
         }
         else
         {
@@ -414,6 +417,36 @@ public class ConversationRouter
                 "I need a number for the total, e.g. 50000.",
                 state.Step, ct);
         }
+    }
+
+    private async Task HandleFulfillmentStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var t = text.Trim().ToUpperInvariant();
+        if (t is "1" or "YES" or "Y" or "DISPATCH" or "RIDER" or "DELIVERY")
+        {
+            draft = draft with { Fulfillment = Domain.Enums.FulfillmentType.Dispatch };
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDeliveryFee,
+                Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
+            return;
+        }
+        if (t is "2" or "NO" or "N" or "DIGITAL" or "PICKUP")
+        {
+            draft = draft with
+            {
+                Fulfillment = Domain.Enums.FulfillmentType.Digital,
+                DeliveryFeeNgn = 0,
+                DriverPhone = "",
+                DriverAccountNumber = "",
+                DriverBankCode = "",
+                DriverBankName = "",
+                DriverHolderName = ""
+            };
+            await AdvanceAsync(state, phone, replyTo, draft, ct);
+            return;
+        }
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskFulfillment,
+            state.Step, ct);
     }
 
     private async Task HandleFeeStepAsync(
@@ -610,7 +643,7 @@ public class ConversationRouter
                 string.IsNullOrWhiteSpace(draft.BuyerEmail)
                     ? $"{phone}@whatsapp.instasafe"
                     : draft.BuyerEmail,
-                Fulfillment: Domain.Enums.FulfillmentType.Dispatch,
+                Fulfillment: draft.Fulfillment ?? Domain.Enums.FulfillmentType.Dispatch,
                 DeliveryFeeNgn: draft.DeliveryFeeNgn,
                 DriverPhone: string.IsNullOrWhiteSpace(draft.DriverPhone) ? null : draft.DriverPhone,
                 DriverAccountNumber: string.IsNullOrWhiteSpace(draft.DriverAccountNumber) ? null : draft.DriverAccountNumber,
@@ -740,6 +773,7 @@ public class ConversationRouter
             (Domain.Entities.ConversationStep.DraftAddress, !string.IsNullOrWhiteSpace(draft.Address)),
             (Domain.Entities.ConversationStep.DraftItems, draft.Items.Count > 0),
             (Domain.Entities.ConversationStep.DraftAmount, draft.TotalNgn > 0),
+            (Domain.Entities.ConversationStep.DraftFulfillment, draft.Fulfillment is not null),
             (Domain.Entities.ConversationStep.DraftDeliveryFee, true),
             (Domain.Entities.ConversationStep.DraftDriverPhone, !string.IsNullOrWhiteSpace(draft.DriverPhone)),
             (Domain.Entities.ConversationStep.DraftDriverAccount, !string.IsNullOrWhiteSpace(draft.DriverAccountNumber)),
@@ -906,7 +940,8 @@ public class ConversationRouter
             draft.CustomerName, draft.CustomerPhone, draft.Address,
             draft.ItemsSummary(), draft.TotalNgn,
             draft.DeliveryFeeNgn, draft.DriverPhone, draft.DriverBankName,
-            draft.DriverHolderName, draft.BuyerEmail);
+            draft.DriverHolderName, draft.BuyerEmail,
+            draft.Fulfillment == Domain.Enums.FulfillmentType.Digital ? "digital (no rider)" : "dispatch rider");
 
     private static Domain.Entities.ConversationStep FirstMissingStep(OrderDraft draft)
     {
@@ -916,6 +951,7 @@ public class ConversationRouter
         if (string.IsNullOrWhiteSpace(draft.Address)) return Domain.Entities.ConversationStep.DraftAddress;
         if (draft.Items.Count == 0) return Domain.Entities.ConversationStep.DraftItems;
         if (draft.TotalNgn <= 0) return Domain.Entities.ConversationStep.DraftAmount;
+        if (draft.Fulfillment is null) return Domain.Entities.ConversationStep.DraftFulfillment;
         if (draft.WantsDispatch)
         {
             if (string.IsNullOrWhiteSpace(draft.DriverPhone)) return Domain.Entities.ConversationStep.DraftDriverPhone;
@@ -952,6 +988,7 @@ public class ConversationRouter
         Domain.Entities.ConversationStep.DraftAddress => ConversationTexts.AskAddress,
         Domain.Entities.ConversationStep.DraftItems => ConversationTexts.AskItems,
         Domain.Entities.ConversationStep.DraftAmount => ConversationTexts.AskAmount,
+        Domain.Entities.ConversationStep.DraftFulfillment => ConversationTexts.AskFulfillment,
         Domain.Entities.ConversationStep.DraftDeliveryFee => ConversationTexts.AskDeliveryFee,
         Domain.Entities.ConversationStep.DraftDriverPhone => ConversationTexts.AskDriverPhone,
         Domain.Entities.ConversationStep.DraftDriverAccount => ConversationTexts.AskDriverAccount,

@@ -44,6 +44,11 @@ public static class ConversationTexts
         "2x Sneakers @22500\n" +
         "1x Belt @5000";
     public const string AskAmount = "What is the total amount in naira? (numbers only, e.g. 50000)";
+    public const string AskFulfillment =
+        "Does this order need a dispatch rider?\n" +
+        "1️⃣ YES — physical delivery (rider confirms with buyer OTP)\n" +
+        "2️⃣ NO — digital/pickup (buyer confirms on the track page)\n" +
+        "Reply 1 or 2.";
     public const string AskDeliveryFee =
         "Agreed delivery fee in naira? (numbers only, e.g. 5000 — send 0 if no dispatch rider)";
     public const string AskDriverPhone =
@@ -74,9 +79,10 @@ public static class ConversationTexts
     public static string ConfirmSummary(
         string customerName, string customerPhone, string address, string itemsLines,
         long totalNgn, long deliveryFeeNgn, string driverPhone, string driverBank = "",
-        string driverHolder = "", string buyerEmail = "")
+        string driverHolder = "", string buyerEmail = "", string fulfillment = "")
     {
         var feeLine = deliveryFeeNgn > 0 ? $"\nDelivery fee: ₦{deliveryFeeNgn:N0}" : "";
+        var fulfillmentLine = string.IsNullOrWhiteSpace(fulfillment) ? "" : $"\nFulfillment: {fulfillment}";
         var driverLine = !string.IsNullOrWhiteSpace(driverPhone)
             ? $"\nDriver: {driverPhone}" + (string.IsNullOrWhiteSpace(driverBank) ? "" : $" ({driverBank})")
                 + (!string.IsNullOrWhiteSpace(driverBank) && string.IsNullOrWhiteSpace(driverHolder)
@@ -87,7 +93,7 @@ public static class ConversationTexts
             $"Customer: {customerName} ({customerPhone})\n" +
             $"Address: {address}\n" +
             $"Items:\n{itemsLines}\n" +
-            $"Total: ₦{totalNgn:N0}{feeLine}{emailLine}\n" +
+            $"Total: ₦{totalNgn:N0}{feeLine}{fulfillmentLine}{emailLine}\n" +
             $"Buyer pays: ₦{totalNgn + deliveryFeeNgn:N0}{driverLine}\n" +
             "Reply YES to create the payment link, or CANCEL to stop.";
     }
