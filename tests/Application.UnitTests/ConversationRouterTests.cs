@@ -142,14 +142,6 @@ public class ConversationRouterTests
             => string.IsNullOrEmpty(input) ? string.Empty : input.Length > maxLength ? input[..maxLength] : input;
     }
 
-    private sealed class FakeConfig : Microsoft.Extensions.Configuration.IConfiguration
-    {
-        public string? this[string key] { get => "https://app.test"; set { } }
-        public IEnumerable<Microsoft.Extensions.Configuration.IConfigurationSection> GetChildren() => [];
-        public Microsoft.Extensions.Primitives.IChangeToken GetReloadToken() => throw new NotImplementedException();
-        public Microsoft.Extensions.Configuration.IConfigurationSection GetSection(string key) => throw new NotImplementedException();
-    }
-
     private sealed class FakePaystack : IPaystackClient
     {
         public List<BankInfo> Banks { get; set; } = new()
@@ -203,7 +195,7 @@ public class ConversationRouterTests
             _paystack, NullLogger<BankDirectory>.Instance);
         _router = new ConversationRouter(
             _states, _vendors, _orders, _parser, _sender, _mediator,
-            new PassThroughSanitizer(), new FakeConfig(), banks,
+            new PassThroughSanitizer(), banks,
             _paystack, NullLogger<ConversationRouter>.Instance);
     }
 
@@ -583,20 +575,19 @@ public class ConversationRouterTests
     }
 
     [Fact]
-    public async Task Gate_UnknownPhone_GetsSignupNudge_AndNoState()
+    public async Task Gate_UnknownPhone_StaysSilent_AndNoState()
     {
         _parser.NextIntent = new ChatIntent(ChatIntentKind.Greeting, null, null);
 
         var handled = await _router.RouteAsync("08019990001", "Hi", null, CancellationToken.None);
 
         Assert.True(handled);
-        Assert.Contains("not signed up", _sender.LastBody);
-        Assert.Contains("https://app.test/signup", _sender.LastBody);
+        Assert.Empty(_sender.Sent);
         Assert.False(_states.Store.ContainsKey("08019990001"));
     }
 
     [Fact]
-    public async Task Gate_UnverifiedVendor_GetsSignupNudge()
+    public async Task Gate_UnverifiedVendor_StaysSilent()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -608,11 +599,11 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990002", "Hi", null, CancellationToken.None);
 
-        Assert.Contains("not signed up", _sender.LastBody);
+        Assert.Empty(_sender.Sent);
     }
 
     [Fact]
-    public async Task Gate_DeactivatedVendor_Blocked()
+    public async Task Gate_DeactivatedVendor_StaysSilent()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -625,11 +616,11 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990003", "Hi", null, CancellationToken.None);
 
-        Assert.Contains("deactivated", _sender.LastBody);
+        Assert.Empty(_sender.Sent);
     }
 
     [Fact]
-    public async Task Gate_UnonboardedVendor_GetsOnboardingNudge()
+    public async Task Gate_UnonboardedVendor_StaysSilent()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -641,8 +632,7 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990004", "1", null, CancellationToken.None);
 
-        Assert.Contains("payout", _sender.LastBody);
-        Assert.Contains("https://app.test/onboarding", _sender.LastBody);
+        Assert.Empty(_sender.Sent);
     }
 
     [Fact]

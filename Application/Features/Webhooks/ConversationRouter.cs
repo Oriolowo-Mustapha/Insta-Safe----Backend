@@ -20,7 +20,6 @@ public class ConversationRouter
     private readonly IWhatsAppSender _sender;
     private readonly IMediator _mediator;
     private readonly ISanitizer _sanitizer;
-    private readonly IConfiguration _config;
     private readonly BankDirectory _banks;
     private readonly IPaystackClient _paystack;
     private readonly ILogger<ConversationRouter> _logger;
@@ -28,12 +27,12 @@ public class ConversationRouter
     public ConversationRouter(
         IConversationRepository states, IVendorRepository vendors, IOrderRepository orders,
         IGroqParser parser, IWhatsAppSender sender, IMediator mediator,
-        ISanitizer sanitizer, IConfiguration config, BankDirectory banks,
+        ISanitizer sanitizer, BankDirectory banks,
         IPaystackClient paystack, ILogger<ConversationRouter> logger)
     {
         _states = states; _vendors = vendors; _orders = orders;
         _parser = parser; _sender = sender; _mediator = mediator;
-        _sanitizer = sanitizer; _config = config; _banks = banks;
+        _sanitizer = sanitizer; _banks = banks;
         _paystack = paystack; _logger = logger;
     }
 
@@ -44,14 +43,12 @@ public class ConversationRouter
         var text = (body ?? "").Trim();
         if (string.IsNullOrEmpty(text)) return false;
 
-        // Bot access gate: signed-up + email-verified + onboarded vendors only.
-        // No state is created for strangers; one short nudge and stop.
-        var gate = await CheckAccessAsync(phone, ct);
-        if (gate is not null)
-        {
-            await SendWithTimeoutAsync(replyTo, gate);
+        // Bot access gate: verified + onboarded vendors only.
+        // Everyone else (buyers replying, strangers, deactivated) gets
+        // SILENCE: inbound is audit-logged upstream, OpenWA gets its 2xx,
+        // and no state is created. Buyers are served via notifications only.
+        if (!await IsBotUserAsync(phone, ct))
             return true;
-        }
 
         var state = await _states.GetByPhoneAsync(phone, ct);
         if (state is null)
@@ -698,25 +695,16 @@ public class ConversationRouter
     }
 
     /// <summary>
-    /// Bot access gate. Returns null when the sender may use the bot,
-    /// otherwise the one-shot nudge to send instead (no state created).
+    /// Bot access gate. Vendors (verified + onboarded + active) may chat;
+    /// everyone else is served through one-way notifications only.
     /// </summary>
-    private async Task<string?> CheckAccessAsync(string phone, CancellationToken ct)
+    private async Task<bool> IsBotUserAsync(string phone, CancellationToken ct)
     {
         var vendor = await _vendors.GetByPhoneAsync(phone, ct);
-        if (vendor is null || !vendor.EmailVerified)
-        {
-            var baseUrl = (_config["Frontend:BaseUrl"] ?? "").TrimEnd('/');
-            return ConversationTexts.SignupRequired(baseUrl);
-        }
-        if (!vendor.IsActive)
-            return ConversationTexts.AccountDeactivated;
-        if (!vendor.OnboardingCompleted)
-        {
-            var baseUrl = (_config["Frontend:BaseUrl"] ?? "").TrimEnd('/');
-            return ConversationTexts.OnboardingRequired(baseUrl);
-        }
-        return null;
+        return vendor is not null
+            && vendor.EmailVerified
+            && vendor.IsActive
+            && vendor.OnboardingCompleted;
     }
 
     private async Task HandleBackStepAsync(

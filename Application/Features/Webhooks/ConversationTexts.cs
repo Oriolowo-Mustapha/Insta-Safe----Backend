@@ -67,17 +67,6 @@ public static class ConversationTexts
 
     public const string Cancelled = "Cancelled. Nothing was created. Type MENU to start over.";
     public const string SessionExpired = "It's been a while, so I reset our chat. Type MENU to start again.";
-    public const string AccountDeactivated = "This vendor account is deactivated. Contact InstaSafe support for help.";
-
-    public static string SignupRequired(string baseUrl) =>
-        string.IsNullOrWhiteSpace(baseUrl)
-            ? "You're not signed up yet — create your InstaSafe vendor account on the web dashboard, verify your email, then come back here."
-            : $"You're not signed up yet — create your account here to continue: {baseUrl}/signup";
-
-    public static string OnboardingRequired(string baseUrl) =>
-        string.IsNullOrWhiteSpace(baseUrl)
-            ? "One more step: add your payout (bank) details on the web dashboard, then come back here."
-            : $"One more step: finish setup (payout details) here: {baseUrl}/onboarding";
 
     public static string ConfirmSummary(string customerName, string customerPhone, string address, string itemsLines, long totalNgn) =>
         ConfirmSummary(customerName, customerPhone, address, itemsLines, totalNgn, 0, "");
