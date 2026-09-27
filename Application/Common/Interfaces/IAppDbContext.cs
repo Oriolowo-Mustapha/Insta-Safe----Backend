@@ -11,6 +11,7 @@ public interface IAppDbContext
     DbSet<ConversationState> ConversationStates { get; }
     DbSet<SavedOrderDraft> SavedOrderDrafts { get; }
     DbSet<ChatMessage> ChatMessages { get; }
+    DbSet<AdminAuditLog> AdminAuditLogs { get; }
     DbSet<EscrowLedger> Ledgers { get; }
     DbSet<OutboxMessage> OutboxMessages { get; }
     DbSet<WebhookEvent> WebhookEvents { get; }

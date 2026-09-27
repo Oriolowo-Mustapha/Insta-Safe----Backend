@@ -27,6 +27,9 @@ public class VendorLoginCommandHandler : IRequestHandler<VendorLoginCommand, Res
 
     public async Task<Result<VendorAuthResponse>> Handle(VendorLoginCommand req, CancellationToken ct)
     {
+        var admin = TryAdminLogin(req);
+        if (admin is not null) return Result<VendorAuthResponse>.Success(admin);
+
         var id = req.LoginId.Trim();
         Domain.Entities.Vendor? vendor = id.Contains('@')
             ? await _vendors.GetByEmailAsync(id.ToLowerInvariant(), ct)
@@ -40,6 +43,23 @@ public class VendorLoginCommandHandler : IRequestHandler<VendorLoginCommand, Res
         var hours = double.TryParse(_config["Auth:TokenHours"], out var h) && h > 0 ? h : 24;
         var token = _tokens.CreateVendorToken(vendor.Id, vendor.Phone);
         return Result<VendorAuthResponse>.Success(
-            new VendorAuthResponse(token, _mapper.Map<VendorDto>(vendor), hours));
+            new VendorAuthResponse(token, _mapper.Map<VendorDto>(vendor), hours, "vendor"));
+    }
+
+    /// <summary>
+    /// Config-seeded super-admin. No vendor row needed; checked before
+    /// vendor lookup so the address can never collide with a real account.
+    /// </summary>
+    private VendorAuthResponse? TryAdminLogin(VendorLoginCommand req)
+    {
+        var adminEmail = _config["Admin:Email"];
+        var adminHash = _config["Admin:PasswordHash"];
+        if (string.IsNullOrWhiteSpace(adminEmail) || string.IsNullOrWhiteSpace(adminHash))
+            return null;
+        if (!string.Equals(req.LoginId.Trim(), adminEmail.Trim(), StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (!_passwords.Verify(req.Password, adminHash))
+            return null;
+        return new VendorAuthResponse(_tokens.CreateAdminToken(adminEmail.Trim()), null, 8, "admin");
     }
 }

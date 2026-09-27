@@ -181,3 +181,30 @@ These power the track page. The OTP/code is the credential; OTPs expire (24h) an
 
 ## 7. WhatsApp bot (for context, not frontend work)
 Same backend via chat: gated to verified + onboarded vendors (others get a signup/onboarding nudge with frontend links — set `Frontend__BaseUrl` so links render). Menu: create link (guided: customer → phone → **buyer email** → address → items → amount → fee → driver phone/account/**bank name** → holder confirm → order confirm), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), track (short status), help. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
+
+---
+
+## 8. Admin console (super-admin only)
+
+**Setup (one time):** generate a hash locally and store it in App Settings — never commit it:
+```powershell
+dotnet run --project API -- hash-password "YourStrongPassword"
+```
+```
+Admin__Email=admin@instasafe.ng
+Admin__PasswordHash=<output above>
+```
+**Login:** same `POST /api/auth/vendor/login` with the admin email + password → response has `"role": "admin"` and `vendor: null`, token valid 8h. All endpoints below need `Authorization: Bearer <admin-token>` (`[Authorize(Roles="admin")]` — vendor/driver tokens get `403`).
+
+- `GET /api/admin/stats` — vendors (total/active), orders per status, held GMV (kobo), released-today (kobo), open disputes/drafts, failed webhooks (24h), outbox backlog
+- `GET /api/admin/vendors?q=&page=` — search phone/name/email; `GET /api/admin/vendors/{id}`
+- `POST /api/admin/vendors/{id}/deactivate|reactivate`, `PUT /api/admin/vendors/{id}/phone`
+- `GET /api/admin/dispatchers`, `POST /api/admin/dispatchers/{id}/deactivate|reactivate`
+- `GET /api/admin/orders?status=&page=`, `GET /api/admin/orders/{id}`
+- `GET /api/admin/disputes` — oldest first
+- `POST /api/admin/orders/{id}/resolve-dispute` `{ "resolution": "release" | "refund" }`
+- `POST /api/admin/orders/{id}/refund`
+- `POST /api/admin/orders/{id}/force-release` `{ "note": "..." }` — pays the vendor remainder from `Held`/`Delivered`/`Disputed`; anything else → `409`
+- `GET /api/admin/chats?phone=&from=&to=` — WhatsApp audit transcript
+- `GET /api/admin/webhooks?provider=&event=&validOnly=` — deliveries incl. signature failures
+- `GET /api/admin/outbox` — backlog + recent errors; `GET /api/admin/audit` — every moderation action above, with actor + note

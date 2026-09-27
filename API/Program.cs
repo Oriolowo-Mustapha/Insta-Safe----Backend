@@ -12,6 +12,12 @@ using System.Text;
 
 Env.TraversePath().Load();
 
+if (args.Length == 2 && args[0] == "hash-password")
+{
+    Console.WriteLine(new InstaSafe.Infrastructure.Services.PasswordHasher().Hash(args[1]));
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((ctx, cfg) =>

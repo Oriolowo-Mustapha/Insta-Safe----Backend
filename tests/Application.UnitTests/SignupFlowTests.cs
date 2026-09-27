@@ -154,6 +154,7 @@ public class SignupFlowTests
     {
         public string CreateVendorToken(Guid vendorId, string phone) => $"TEST-TOKEN:{vendorId}";
         public string CreateDispatcherToken(Guid dispatcherId, string phone) => $"TEST-DRIVER:{dispatcherId}";
+        public string CreateAdminToken(string email) => $"TEST-ADMIN:{email}";
     }
 
     [Fact]

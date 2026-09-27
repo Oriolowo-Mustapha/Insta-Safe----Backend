@@ -34,9 +34,12 @@ public class JwtTokenService : IJwtTokenService
     public string CreateDispatcherToken(Guid dispatcherId, string phone) =>
         CreateToken(
             [new Claim(ClaimsPrincipalExtensions.DispatcherIdClaim, dispatcherId.ToString())],
-            phone, "dispatcher");
+            phone, "dispatcher", _hours);
 
-    private string CreateToken(List<Claim> idClaims, string phone, string role)
+    public string CreateAdminToken(string email) =>
+        CreateToken([], email, "admin", 8);
+
+    private string CreateToken(List<Claim> idClaims, string phone, string role, double? hoursOverride = null)
     {
         if (_key.Length < 32)
         {
@@ -57,7 +60,7 @@ public class JwtTokenService : IJwtTokenService
             issuer: _issuer,
             audience: _audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddHours(_hours),
+            expires: DateTime.UtcNow.AddHours(hoursOverride ?? _hours),
             signingCredentials: credentials);
 
         return new JwtSecurityTokenHandler().WriteToken(token);

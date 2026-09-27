@@ -60,6 +60,7 @@ public class DispatchOtpTests
     {
         public string CreateVendorToken(Guid vendorId, string phone) => "V";
         public string CreateDispatcherToken(Guid dispatcherId, string phone) => $"DRIVER:{dispatcherId}";
+        public string CreateAdminToken(string email) => $"ADMIN:{email}";
     }
 
     [Fact]

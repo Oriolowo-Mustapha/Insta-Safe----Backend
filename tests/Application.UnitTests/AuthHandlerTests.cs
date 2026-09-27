@@ -60,6 +60,7 @@ public class AuthHandlerTests
     {
         public string CreateVendorToken(Guid vendorId, string phone) => $"TEST-TOKEN:{vendorId}";
         public string CreateDispatcherToken(Guid dispatcherId, string phone) => $"TEST-DRIVER-TOKEN:{dispatcherId}";
+        public string CreateAdminToken(string email) => $"TEST-ADMIN:{email}";
     }
 
     private sealed class FakeConfig : Microsoft.Extensions.Configuration.IConfiguration

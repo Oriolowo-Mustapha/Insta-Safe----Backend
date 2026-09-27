@@ -27,6 +27,7 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<ConversationState> ConversationStates => Set<ConversationState>();
     public DbSet<SavedOrderDraft> SavedOrderDrafts => Set<SavedOrderDraft>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
     public DbSet<EscrowLedger> Ledgers => Set<EscrowLedger>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
@@ -75,6 +76,17 @@ public class AppDbContext : DbContext, IAppDbContext
             e.Property(x => x.DraftJson).HasMaxLength(4000).IsRequired();
             e.HasIndex(x => x.VendorPhone);
             e.HasIndex(x => x.Status);
+        });
+
+        b.Entity<AdminAuditLog>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Actor).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Action).HasMaxLength(100).IsRequired();
+            e.Property(x => x.TargetType).HasMaxLength(100).IsRequired();
+            e.Property(x => x.TargetId).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Note).HasMaxLength(1000);
+            e.HasIndex(x => x.CreatedAt);
         });
 
         b.Entity<Dispatcher>(e =>
