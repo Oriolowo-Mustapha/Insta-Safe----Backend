@@ -135,9 +135,9 @@ public class AdminController : ControllerBase
     [HttpGet("orders")]
     public async Task<ActionResult<ApiResponse<List<OrderDto>>>> Orders(
         [FromQuery] OrderStatus? status = null, [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 20, CancellationToken ct = default)
+        [FromQuery] int pageSize = 20, [FromQuery] string? q = null, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(new ListAllOrdersQuery(status, page, pageSize), ct);
+        var result = await _mediator.Send(new ListAllOrdersQuery(status, page, pageSize, q), ct);
         return Ok(ApiResponse<List<OrderDto>>.FromResult(result));
     }
 
