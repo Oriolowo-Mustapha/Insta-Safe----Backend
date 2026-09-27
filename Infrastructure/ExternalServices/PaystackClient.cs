@@ -179,31 +179,40 @@ public class PaystackClient : IPaystackClient
 
     public async Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
     {
-        // Full Nigerian bank list (payout dropdowns). Pages through Paystack's
-        // 100-per-page cap; stops at the first short page.
+        // Full Nigerian bank list (payout dropdowns). /bank ignores `page`;
+        // it is a cursor API (use_cursor=true, then follow meta.next).
+        // Dedupe by code as a guard against repeated pages.
         var all = new List<(string Name, string Slug, string Code)>();
-        for (var page = 1; page <= 5; page++)
+        string? cursor = null;
+        for (var i = 0; i < 5; i++)
         {
-            var res = await _http.GetAsync($"/bank?country=nigeria&perPage=100&page={page}", ct);
+            var url = "/bank?country=nigeria&perPage=100&use_cursor=true"
+                + (cursor is null ? "" : $"&next={Uri.EscapeDataString(cursor)}");
+            var res = await _http.GetAsync(url, ct);
             if (!res.IsSuccessStatusCode) break;
-            List<(string Name, string Slug, string Code)> batch;
             try
             {
                 using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
-                batch = doc.RootElement.GetProperty("data").EnumerateArray()
+                var root = doc.RootElement;
+                var batch = root.GetProperty("data").EnumerateArray()
                     .Select(b => (
                         Name: b.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
                         Slug: b.TryGetProperty("slug", out var s) ? s.GetString() ?? "" : "",
                         Code: b.TryGetProperty("code", out var c) ? c.GetString() ?? "" : ""))
-                    .Where(b => !string.IsNullOrEmpty(b.Name))
+                    .Where(b => !string.IsNullOrEmpty(b.Name) && !string.IsNullOrEmpty(b.Code))
                     .ToList();
+                foreach (var b in batch)
+                    if (!all.Any(x => x.Code == b.Code)) all.Add(b);
+                cursor = root.TryGetProperty("meta", out var m)
+                    && m.TryGetProperty("next", out var nx)
+                    && nx.ValueKind == JsonValueKind.String
+                    ? nx.GetString() : null;
+                if (string.IsNullOrEmpty(cursor) || batch.Count < 100) break;
             }
             catch
             {
                 break;
             }
-            all.AddRange(batch);
-            if (batch.Count < 100) break;
         }
         return all;
     }

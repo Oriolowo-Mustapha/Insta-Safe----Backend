@@ -138,14 +138,17 @@ public class PaystackResolveTests
             new FakeConfig(), NullLogger<PaystackClient>.Instance), handler);
     }
 
-    private static string BankPage(params (string Name, string Slug, string Code)[] banks) =>
+    private static string BankPage(IEnumerable<(string Name, string Slug, string Code)> banks, string? next) =>
         """{"status":true,"data":[""" +
         string.Join(",", banks.Select(b =>
             $$"""{"name":"{{b.Name}}","slug":"{{b.Slug}}","code":"{{b.Code}}"}""")) +
-        "]}";
+        "],\"meta\":{\"next\":" + (next is null ? "null" : $"\"{next}\"") + "}}";
+
+    private static string BankPage(params (string Name, string Slug, string Code)[] banks) =>
+        BankPage(banks, null);
 
     [Fact]
-    public async Task ListAllBanks_StopsAfterShortPage()
+    public async Task ListAllBanks_StopsWhenNoCursor()
     {
         var (client, handler) = Paged((HttpStatusCode.OK, BankPage(
             ("Abbey Mortgage Bank", "abbey-mortgage-bank", "801"),
@@ -159,13 +162,13 @@ public class PaystackResolveTests
     }
 
     [Fact]
-    public async Task ListAllBanks_PagesUntilShortPage()
+    public async Task ListAllBanks_FollowsCursor_AndDedupes()
     {
-        var full = string.Join(",", Enumerable.Range(1, 100).Select(i =>
-            $$"""{"name":"Bank {{i}}","slug":"bank-{{i}}","code":"{{i:000}}"}"""));
+        var full = Enumerable.Range(1, 100).Select(i =>
+            ($"Bank {i}", $"bank-{i}", $"{i:000}")).ToArray();
         var (client, handler) = Paged(
-            (HttpStatusCode.OK, """{"status":true,"data":[""" + full + "]}"),
-            (HttpStatusCode.OK, BankPage(("Last Bank", "last-bank", "999"))));
+            (HttpStatusCode.OK, BankPage(full, "cursor-2")),
+            (HttpStatusCode.OK, BankPage([("Last Bank", "last-bank", "999"), ("Bank 1", "bank-1", "001")], null)));
 
         var banks = await client.ListAllBanksAsync(CancellationToken.None);
 
