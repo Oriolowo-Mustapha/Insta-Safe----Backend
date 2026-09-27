@@ -637,6 +637,35 @@ public class ConversationRouterTests
     }
 
     [Fact]
+    public async Task FreeText_CompleteDigitalOrder_GoesStraightToConfirm()
+    {
+        const string phone = "08010000042";
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.CreateOrder, null, null);
+        _parser.NextParsed = new ParsedOrder("Chidi", "2348028613918", "Email delivery",
+            new List<ParsedItem> { new("Ebook", 1, 5000) }, 5000,
+            0, "", "chidi@example.com", "digital");
+
+        await Send(phone, "Ebook for Chidi 0808028613918 chidi@example.com email delivery 5000 digital");
+
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+        Assert.Contains("digital", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task FreeText_PartialDigitalOrder_AsksOnlyMissing()
+    {
+        const string phone = "08010000043";
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.CreateOrder, null, null);
+        _parser.NextParsed = new ParsedOrder("Chidi", "2348028613918", "",
+            new List<ParsedItem> { new("Ebook", 1, 5000) }, 5000,
+            0, "", "chidi@example.com", "digital");
+
+        await Send(phone, "Ebook for Chidi, digital");
+
+        Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
+    }
+
+    [Fact]
     public async Task Reply_UsesSenderJid_NotReconstructedCus()
     {
         SeedVendor("08010000010");

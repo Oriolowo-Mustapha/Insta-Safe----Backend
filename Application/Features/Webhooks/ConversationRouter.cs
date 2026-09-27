@@ -348,7 +348,8 @@ public class ConversationRouter
             _sanitizer.Clean(PhoneNormalizer.Normalize(parsed.DriverPhone), 20),
             BuyerEmail: InstaSafe.Application.Common.Helpers.EmailChecker.IsPlausible(parsed.BuyerEmail)
                 ? _sanitizer.Clean(parsed.BuyerEmail.Trim().ToLowerInvariant(), 200)
-                : "");
+                : "",
+            Fulfillment: ParseFulfillmentHint(parsed.FulfillmentHint));
 
         if (draft.IsComplete())
         {
@@ -361,6 +362,14 @@ public class ConversationRouter
         await ReplyAndSaveAsync(state, phone, replyTo,
             ConversationTexts.MissingDetails(draft.MissingFields()) + "\n\n" + PromptFor(next),
             next, ct, draft);
+    }
+
+    private static Domain.Enums.FulfillmentType? ParseFulfillmentHint(string? hint)
+    {
+        var h = (hint ?? "").Trim().ToLowerInvariant();
+        if (h.StartsWith("digit")) return Domain.Enums.FulfillmentType.Digital;
+        if (h.StartsWith("dispatch")) return Domain.Enums.FulfillmentType.Dispatch;
+        return null;
     }
 
     private async Task HandleItemsStepAsync(

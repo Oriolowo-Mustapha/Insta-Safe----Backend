@@ -11,7 +11,8 @@ public static class ConversationTexts
         "1️⃣ Create escrow link (new order)\n" +
         "2️⃣ Track an order\n" +
         "3️⃣ Help / talk to support\n" +
-        "Reply with 1, 2 or 3. Type MENU anytime to come back here, CANCEL to stop, BACK to edit the previous answer.";
+        "Reply with 1, 2 or 3 — or just type the full order in one message and I'll pick out the details. " +
+        "Type MENU anytime to come back here, CANCEL to stop, BACK to edit the previous answer.";
 
     public static string MenuWithContinue(int openCount) =>
         "What would you like to do?\n" +
@@ -19,7 +20,8 @@ public static class ConversationTexts
         "2️⃣ Track an order\n" +
         "3️⃣ Help / talk to support\n" +
         $"4️⃣ Continue unfinished order ({openCount} saved)\n" +
-        "Reply with 1, 2, 3 or 4. Type MENU anytime to come back here, CANCEL to stop, BACK to edit the previous answer.";
+        "Reply with 1, 2, 3 or 4 — or just type the full order in one message and I'll pick out the details. " +
+        "Type MENU anytime to come back here, CANCEL to stop, BACK to edit the previous answer.";
 
     public const string ProgressSaved =
         "I've saved your progress — pick it up anytime with 4. Continue below.";
