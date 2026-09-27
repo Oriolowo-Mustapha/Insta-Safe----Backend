@@ -701,6 +701,44 @@ public class ConversationRouter
     {
         try
         {
+            // Exactly-once: a prior YES may have created the order while the
+            // link reply failed to send. Resend the SAME link, never a new order.
+            if (draft.CreatedOrderId is not null)
+            {
+                var existing = await _mediator.Send(
+                    new InstaSafe.Application.Features.Orders.Queries.GetOrderById.GetOrderByIdQuery(
+                        draft.CreatedOrderId.Value), ct);
+                if (existing.IsSuccess)
+                {
+                    try
+                    {
+                        await SendWithTimeoutAsync(replyTo,
+                            ConversationTexts.VendorOrderSent(
+                                existing.Value!.OrderNumber, existing.Value.CustomerName, existing.Value.AmountKobo)
+                            + "\n(This is your existing order — no duplicate was created.)");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Vendor confirmation resend failed for order {OrderId}", existing.Value!.Id);
+                        return;
+                    }
+                    if (state.CurrentDraftId is not null)
+                    {
+                        var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+                        if (ticket is not null)
+                        {
+                            ticket.Status = Domain.Entities.DraftTicketStatus.Completed;
+                            ticket.CompletedOrderId = existing.Value!.Id;
+                        }
+                    }
+                    Reset(state);
+                    state.Touch();
+                    await _states.SaveAsync(ct);
+                    return;
+                }
+                draft = draft with { CreatedOrderId = null };
+            }
+
             var result = await _mediator.Send(new CreateOrderCommand(
                 phone,
                 draft.CustomerName,
@@ -719,6 +757,32 @@ public class ConversationRouter
 
             if (result.IsSuccess)
             {
+                // Remember the created order BEFORE the vendor confirmation:
+                // if that send fails, the next YES resends the SAME link.
+                draft = draft with { CreatedOrderId = result.Value!.Id };
+                state.DraftJson = draft.Save();
+                state.Step = Domain.Entities.ConversationStep.Confirming;
+                if (state.CurrentDraftId is not null)
+                {
+                    var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+                    if (ticket is not null)
+                        ticket.DraftJson = draft.Save();
+                }
+                state.Touch();
+                await _states.SaveAsync(ct);
+                try
+                {
+                    // Payment link already went to the CUSTOMER (handler notifies
+                    // WhatsApp + email); the vendor just gets confirmation.
+                    await SendWithTimeoutAsync(replyTo,
+                        ConversationTexts.VendorOrderSent(
+                            result.Value!.OrderNumber, result.Value.CustomerName, result.Value.AmountKobo));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Vendor confirmation send failed for order {OrderId}; link resendable via YES", result.Value!.Id);
+                    return;
+                }
                 if (state.CurrentDraftId is not null)
                 {
                     var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
@@ -731,11 +795,6 @@ public class ConversationRouter
                 Reset(state);
                 state.Touch();
                 await _states.SaveAsync(ct);
-                // Payment link already went to the CUSTOMER (handler notifies
-                // WhatsApp + email); the vendor just gets confirmation.
-                await SendWithTimeoutAsync(replyTo,
-                    ConversationTexts.VendorOrderSent(
-                        result.Value!.OrderNumber, result.Value.CustomerName, result.Value.AmountKobo));
                 return;
             }
 

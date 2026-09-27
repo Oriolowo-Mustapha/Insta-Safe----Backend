@@ -109,8 +109,14 @@ public class ConversationRouterTests
     {
         public List<(string To, string Body)> Sent { get; } = new();
         public string LastBody => Sent.Count == 0 ? "" : Sent[^1].Body;
+        public bool FailNextSend { get; set; }
         public Task SendTextAsync(string toPhone, string body, CancellationToken ct)
         {
+            if (FailNextSend)
+            {
+                FailNextSend = false;
+                throw new HttpRequestException("openwa down");
+            }
             Sent.Add((toPhone, body));
             return Task.CompletedTask;
         }
@@ -121,10 +127,14 @@ public class ConversationRouterTests
     private sealed class FakeMediator : IMediator
     {
         public Func<CreateOrderCommand, Result<OrderDto>>? OnCreateOrder;
+        public Func<Guid, Result<OrderDto>>? OnGetOrderById;
         public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken ct = default)
         {
             if (request is CreateOrderCommand cmd && OnCreateOrder is not null)
                 return Task.FromResult((TResponse)(object)OnCreateOrder(cmd));
+            if (request is InstaSafe.Application.Features.Orders.Queries.GetOrderById.GetOrderByIdQuery q
+                && OnGetOrderById is not null)
+                return Task.FromResult((TResponse)(object)OnGetOrderById(q.OrderId));
             throw new NotImplementedException();
         }
         public Task Send<TRequest>(TRequest request, CancellationToken ct = default) where TRequest : IRequest
@@ -404,6 +414,51 @@ public class ConversationRouterTests
         await Send(phone, "YES");
 
         Assert.Contains("Something went wrong", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Confirm_SendFailure_RetryResends_WithoutDuplicate()
+    {
+        const string phone = "08010000050";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
+        var orderId = Guid.NewGuid();
+        var createCalls = 0;
+        _mediator.OnCreateOrder = cmd =>
+        {
+            createCalls++;
+            return Result<OrderDto>.Success(new OrderDto(
+                orderId, cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
+                cmd.DeliveryAddress, new(), 4500000, "NGN", OrderStatus.AwaitingPayment,
+                "ref-1", "https://pay.test/ref-1", null, null, null));
+        };
+        _mediator.OnGetOrderById = id => id == orderId
+            ? Result<OrderDto>.Success(new OrderDto(
+                orderId, phone, "Chidi", "08087654321",
+                "Lekki", new(), 4500000, "NGN", OrderStatus.AwaitingPayment,
+                "ref-1", "https://pay.test/ref-1", null, null, null))
+            : Result<OrderDto>.Failure("not found");
+
+        await Send(phone, "1");
+        await Send(phone, "Chidi");
+        await Send(phone, "08087654321");
+        await Send(phone, "chidi@example.com");
+        await Send(phone, "Lekki");
+        await Send(phone, "2x Sneakers @22500");
+        await Send(phone, "1");
+        await Send(phone, "0");
+
+        _sender.FailNextSend = true;
+        await Send(phone, "YES");
+
+        Assert.Equal(1, createCalls);
+        Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+
+        await Send(phone, "YES");
+
+        Assert.Equal(1, createCalls);
+        Assert.Contains("no duplicate", _sender.LastBody);
         Assert.Equal(ConversationStep.Idle, State(phone).Step);
     }
 

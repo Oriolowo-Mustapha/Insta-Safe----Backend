@@ -18,7 +18,8 @@ public sealed record OrderDraft(
     string DriverBankName = "",
     string DriverHolderName = "",
     string BuyerEmail = "",
-    FulfillmentType? Fulfillment = null)
+    FulfillmentType? Fulfillment = null,
+    Guid? CreatedOrderId = null)
 {
     public static OrderDraft Empty() => new("", "", "", new List<DraftItem>(), 0);
 
