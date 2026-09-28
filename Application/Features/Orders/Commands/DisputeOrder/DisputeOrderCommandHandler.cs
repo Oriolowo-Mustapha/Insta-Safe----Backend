@@ -10,7 +10,7 @@ using MediatR;
 
 namespace InstaSafe.Application.Features.Orders.Commands.DisputeOrder;
 
-public class DisputeOrderCommandHandler : IRequestHandler<DisputeOrderCommand, Result<OrderDto>>
+public class DisputeOrderCommandHandler : IRequestHandler<DisputeOrderCommand, Result<PublicOrderDto>>
 {
     private readonly IOrderRepository _orders;
     private readonly ISanitizer _sanitizer;
@@ -23,11 +23,11 @@ public class DisputeOrderCommandHandler : IRequestHandler<DisputeOrderCommand, R
         _orders = orders; _sanitizer = sanitizer; _notifier = notifier; _mapper = mapper;
     }
 
-    public async Task<Result<OrderDto>> Handle(DisputeOrderCommand req, CancellationToken ct)
+    public async Task<Result<PublicOrderDto>> Handle(DisputeOrderCommand req, CancellationToken ct)
     {
         var order = await _orders.GetByIdAsync(req.OrderId, ct);
         if (order is null)
-            return Result<OrderDto>.Failure("Order not found.");
+            return Result<PublicOrderDto>.Failure("Order not found.");
         if (order.Status is not (OrderStatus.Held or OrderStatus.Delivered))
             throw new ConflictException($"Cannot dispute from status {order.Status}.");
 
@@ -39,6 +39,6 @@ public class DisputeOrderCommandHandler : IRequestHandler<DisputeOrderCommand, R
 
         await _notifier.DisputeFiledAsync(order, order.DisputeReason);
 
-        return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
+        return Result<PublicOrderDto>.Success(_mapper.Map<PublicOrderDto>(order));
     }
 }

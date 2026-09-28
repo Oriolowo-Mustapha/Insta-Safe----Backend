@@ -67,11 +67,11 @@ public class OrdersController : ControllerBase
 
     [HttpGet("by-reference/{reference}")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> GetByReference(string reference, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<PublicOrderDto>>> GetByReference(string reference, CancellationToken ct)
     {
         var result = await _mediator.Send(new GetOrderByReferenceQuery(reference), ct);
-        if (!result.IsSuccess) return NotFound(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result));
+        if (!result.IsSuccess) return NotFound(ApiResponse<PublicOrderDto>.FromResult(result));
+        return Ok(ApiResponse<PublicOrderDto>.FromResult(result));
     }
 
     /// <summary>Public customer tracker: ordered status timeline for an order reference. No auth.</summary>
@@ -97,12 +97,12 @@ public class OrdersController : ControllerBase
 
     [HttpPost("{id:guid}/verify-otp")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> VerifyOtp(
+    public async Task<ActionResult<ApiResponse<PublicOrderDto>>> VerifyOtp(
         Guid id, [FromBody] VerifyOtpRequest body, CancellationToken ct)
     {
         var result = await _mediator.Send(new VerifyOtpCommand(id, body.Otp), ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Funds released to vendor."));
+        if (!result.IsSuccess) return BadRequest(ApiResponse<PublicOrderDto>.FromResult(result));
+        return Ok(ApiResponse<PublicOrderDto>.FromResult(result, "Funds released to vendor."));
     }
 
     /// <summary>
@@ -133,21 +133,21 @@ public class OrdersController : ControllerBase
 
     [HttpPost("{id:guid}/confirm-satisfaction")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> ConfirmSatisfaction(Guid id, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<PublicOrderDto>>> ConfirmSatisfaction(Guid id, CancellationToken ct)
     {
         var result = await _mediator.Send(new ConfirmSatisfactionCommand(id), ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Order confirmed. Funds released to vendor."));
+        if (!result.IsSuccess) return BadRequest(ApiResponse<PublicOrderDto>.FromResult(result));
+        return Ok(ApiResponse<PublicOrderDto>.FromResult(result, "Order confirmed. Funds released to vendor."));
     }
 
     [HttpPost("{id:guid}/dispute")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> Dispute(
+    public async Task<ActionResult<ApiResponse<PublicOrderDto>>> Dispute(
         Guid id, [FromBody] DisputeRequest body, CancellationToken ct)
     {
         var result = await _mediator.Send(new DisputeOrderCommand(id, body.Reason), ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Dispute filed. Funds frozen until resolved."));
+        if (!result.IsSuccess) return BadRequest(ApiResponse<PublicOrderDto>.FromResult(result));
+        return Ok(ApiResponse<PublicOrderDto>.FromResult(result, "Dispute filed. Funds frozen until resolved."));
     }
 
     [HttpPost("{id:guid}/resolve-dispute")]

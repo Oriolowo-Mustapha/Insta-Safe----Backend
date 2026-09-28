@@ -7,15 +7,40 @@ Frontend origin (production): `https://instasafe-six.vercel.app`
 
 ## What changed since the last handoff
 
-Read this section first — it is the delta. Everything else in this document is still accurate.
+Read this section first — it is the delta.
 
-1. **`/track/{orderNumber}` is now a required frontend route.** The backend puts a live link in the buyer's payment-link WhatsApp, bank-transfer WhatsApp, status emails, **and the dispatcher's assignment WhatsApp**. The dispatcher's copy is the one to action first. See [The `/track/{orderNumber}` page](#the-trackordernumber-page).
+### ⚠️ BREAKING: three order shapes now exist
+
+There used to be one `OrderDto` for every surface. There are now three, chosen per endpoint:
+
+| DTO | Used by | Auth |
+|---|---|---|
+| `OrderDto` | Vendor dashboard + admin console | vendor/admin JWT |
+| `PublicOrderDto` | Public track page + guest actions | **none** |
+| `DispatchOrderDto` | Rider portal | driver JWT |
+
+**If you read fields off the track page or the rider app, you must re-check them — the response is a different, smaller object.** Nothing was renamed; fields were *removed*. Details and the exact field lists are in [Order shapes](#order-shapes-whichever-dto-you-get).
+
+Affected endpoints:
+- `GET /api/orders/by-reference/{ref}` → `PublicOrderDto` **(breaking)**
+- `POST /api/orders/{id}/verify-otp` → `PublicOrderDto` **(breaking)**
+- `POST /api/orders/{id}/confirm-satisfaction` → `PublicOrderDto` **(breaking)**
+- `POST /api/orders/{id}/dispute` → `PublicOrderDto` **(breaking)**
+- `GET /api/dispatch/assigned` → `List<DispatchOrderDto>` **(breaking)**
+- `POST /api/dispatch/orders/{id}/confirm` → `DispatchOrderDto` **(breaking)**
+
+Why: the track endpoints are anonymous and the order number is the only credential, so returning the full DTO let anyone holding a leaked link read buyer contact details, the Paystack virtual account number, and the payment auth URL. The rider portal had the same problem by handing a third party the buyer's email and the escrow internals. The new shapes are deliberately minimal per audience.
+
+### The rest of the delta
+
+1. **`/track/{orderNumber}` is now a required frontend route.** The backend puts a live link in the buyer's payment-link WhatsApp, bank-transfer WhatsApp, status emails, **and the dispatcher's assignment WhatsApp**. See [The `/track/{orderNumber}` page](#the-trackordernumber-page).
 2. **`GET /api/admin/orders`** gained `?q=` (search by order number or Paystack reference).
 3. **`POST /api/admin/orders/{id}/retry-payout`** is new (admin only).
-4. **`GET /api/payments/banks`** now returns the complete Nigerian bank list in one call (no paging, no truncation) — keep calling it once and cache.
+4. **`GET /api/payments/banks`** now returns the complete Nigerian bank list in one call (no paging, no truncation) — call it once and cache.
 5. `OrderDto` now always includes `orderNumber` (`IS-XXXXXX`).
 
-Nothing in this list is a breaking change to an existing endpoint: no field was removed or renamed.
+The only breaking changes are the six DTO swaps above. No route, HTTP method, envelope, status code, or field name changed.
+
 
 ## Conventions
 
@@ -61,6 +86,57 @@ Nigerian mobiles, canonical `234...` form everywhere. The API normalizes `080...
 ### OrderStatus
 `Draft | AwaitingPayment | Held | Delivered | Released | Refunded | Disputed | Cancelled`
 (New: `Delivered = 7`, funds frozen in 24h inspection window.)
+
+---
+
+## Order shapes (which DTO you get)
+
+Amounts are **kobo** everywhere. Item prices are kobo too.
+
+### `OrderDto` — vendor + admin (JWT)
+The full record. Use this for the vendor dashboard and the admin console.
+```
+id, vendorPhone, customerName, customerPhone, buyerEmail, deliveryAddress,
+items[{description, quantity, unitPriceKobo}], amountKobo, currency, status,
+paystackReference, paystackAuthUrl, heldAt, releasedAt, transferReference,
+refundReference, fulfillment, deliveryFeeKobo, driverPhone,
+driverTransferReference, deliveredAt, releaseDueAt, disputeReason,
+payVirtualAccountNumber, payVirtualAccountBank, orderNumber
+```
+
+### `PublicOrderDto` — public track page (no auth)
+Same order, trimmed. **Removed vs `OrderDto`:** `vendorPhone`, `customerPhone`, `buyerEmail`, `paystackReference`, `paystackAuthUrl`, `transferReference`, `refundReference`, `payVirtualAccountNumber`, `payVirtualAccountBank`, `driverPhone`, `driverTransferReference`.
+```
+id, orderNumber, status, fulfillment, amountKobo, deliveryFeeKobo, currency,
+customerName, deliveryAddress, items[{description, quantity, unitPriceKobo}],
+heldAt, deliveredAt, releaseDueAt, releasedAt, disputeReason
+```
+`id` is still here on purpose — the guest buttons post to `/api/orders/{id}/…`.
+
+### `DispatchOrderDto` — rider portal (driver JWT)
+What a rider needs to make the drop, and nothing about the money behind it. **Removed vs `OrderDto`:** `amountKobo` (escrow — the rider never handles the order value), `vendorPhone`, `buyerEmail`, `paystackReference`, `paystackAuthUrl`, `transferReference`, `refundReference`, `payVirtualAccountNumber`, `payVirtualAccountBank`, `driverTransferReference`.
+```
+id, orderNumber, status, fulfillment, customerName, customerPhone,
+deliveryAddress, deliveryFeeKobo, currency, items[{...}], driverPhone,
+deliveredAt, releaseDueAt
+```
+`customerPhone` and `deliveryAddress` are **kept** — coordinating the drop is the rider's actual job. `deliveryFeeKobo` is their own payout.
+
+### Migration cheat-sheet
+| You were reading this on the track page | Now |
+|---|---|
+| `customerPhone` | gone — show `customerName` + `deliveryAddress` |
+| `buyerEmail` | gone |
+| `paystackAuthUrl` | gone — the buyer already paid, or the payment link came by WhatsApp/email |
+| `paystackReference` | gone — display `orderNumber` instead |
+| `transferReference` / `refundReference` | gone — the timeline conveys the outcome |
+| `payVirtualAccountNumber/Bank` | gone — never expose the escrow account on a shareable page |
+
+| You were reading this in the rider app | Now |
+|---|---|
+| `amountKobo` | gone — show `deliveryFeeKobo` only |
+| `buyerEmail`, `payVirtualAccountNumber`, all `*Reference` | gone |
+| `customerPhone`, `deliveryAddress`, `deliveryFeeKobo` | unchanged |
 
 ---
 
@@ -171,15 +247,15 @@ All vendor JWT, own id only (else `403`):
 - `POST /api/orders/{id}/resolve-dispute` `{ "resolution": "release" | "refund" }` — resolve a frozen dispute.
 
 ### Buyer/guest actions (all **Public**, no token)
-These power the track page. The OTP/code is the credential; OTPs expire (24h) and lock after 5 tries.
+These power the track page. The order number is the only credential; OTPs expire (24h) and lock after 5 tries. All five return **`PublicOrderDto`** (see [Order shapes](#order-shapes-whichever-dto-you-get)) — not `OrderDto`.
 - `GET /api/orders/by-reference/{ref}` — order detail (`ref` = order number, Paystack reference, or order id)
 - `GET /api/orders/by-reference/{ref}/timeline` — ordered tracker events:
-  `created → payment_pending → funds_held → delivered (+inspection deadline) → released/refunded/disputed`, each `{ key, label, at }`. Render this list as the tracker UI.
+  `created → payment_pending → funds_held → delivered (+inspection deadline) → released/refunded/disputed`, each `{ key, label, at }`. Render this list as the tracker UI. Returns `OrderTimelineDto` (unchanged).
 - `POST /api/orders/{id}/confirm-satisfaction` — digital orders: buyer confirms → instant release
 - `POST /api/orders/{id}/dispute` `{ "reason": "..." }` — freezes funds (`Held`/`Delivered` only)
 - `POST /api/orders/{id}/verify-otp` `{ "otp": "123456" }` — legacy/rider path: releases digital orders and driver-less dispatch orders. Orders **with** an assigned driver must use the driver portal below.
 
-`OrderDto` (amounts in kobo): `id, vendorPhone, customerName, customerPhone, buyerEmail, deliveryAddress, items[{description,quantity,unitPriceKobo}], amountKobo, currency, status, paystackReference, paystackAuthUrl, heldAt, releasedAt, transferReference, refundReference, fulfillment, deliveryFeeKobo, driverPhone, driverTransferReference, deliveredAt, releaseDueAt, disputeReason, payVirtualAccountNumber/Bank, orderNumber`.
+Vendor and admin surfaces return the full `OrderDto`: `id, vendorPhone, customerName, customerPhone, buyerEmail, deliveryAddress, items[{description,quantity,unitPriceKobo}], amountKobo, currency, status, paystackReference, paystackAuthUrl, heldAt, releasedAt, transferReference, refundReference, fulfillment, deliveryFeeKobo, driverPhone, driverTransferReference, deliveredAt, releaseDueAt, disputeReason, payVirtualAccountNumber/Bank, orderNumber`.
 
 ### The `/track/{orderNumber}` page
 
@@ -201,7 +277,8 @@ Behaviour notes:
 - `{orderNumber}` is case-insensitive (`is-8k4n2q` works). The same endpoint still accepts a Paystack reference or an order GUID, so older links keep resolving.
 - Unknown number → `404` with `success: false`. Render "order not found", not an error page.
 - The dispatcher's link is the **public** page, not a driver-only view. It shows the same buyer-facing tracker. If you later want a rider-specific view, keep it behind the driver JWT (`/api/dispatch/*`) — do not put anything extra on the public track page.
-- **Treat the order number as a secret.** These two endpoints are anonymous and the order number is the only credential (6 chars from a 30-char alphabet via CSPRNG, so it is not guessable, but it *is* a bearer token). `OrderDto` includes buyer PII (`customerName`, `customerPhone`, `buyerEmail`, `deliveryAddress`, `payVirtualAccountNumber`). Do not send the number to analytics, error trackers, or third-party scripts, and do not put it in a `Referer` to an external origin.
+- **Treat the order number as a secret.** These endpoints are anonymous and the order number is the only credential (6 chars from a 30-char alphabet via CSPRNG, so it is not guessable, but it *is* a bearer token). The response is now a trimmed `PublicOrderDto` — it deliberately excludes `customerPhone`, `buyerEmail`, every Paystack/transfer/refund reference, the payment auth URL, and the escrow virtual account, so a leaked link no longer hands over buyer contact details or anything payable. Do not send the number to analytics, error trackers, or third-party scripts, and do not put it in a `Referer` to an external origin.
+- **If you need richer data on the track page** (payment references for a receipt, the virtual account for a pending transfer), it is no longer available anonymously. Get it from the vendor dashboard, or ask us to add a specific field back to `PublicOrderDto` — do not just widen the DTO client-side.
 
 
 ---
@@ -210,8 +287,10 @@ Behaviour notes:
 
 - `POST /api/dispatch/request-code` **(Public)** `{ "phone": "..." }` — works for **any** phone (row auto-created). Code via WhatsApp, 10-min expiry.
 - `POST /api/dispatch/verify-code` **(Public)** → `{ token, dispatcher, expiresInHours }`.
-- `GET /api/dispatch/assigned?page=&pageSize=` (driver JWT) — my `Held`/`Delivered` deliveries only. `pageSize` is clamped to 1–100.
-- `POST /api/dispatch/orders/{id}/confirm` (driver JWT) `{ "otp": "<buyer code>" }` — marks `Delivered`, starts the 24h window, pays the rider fee instantly. Wrong code → 400; locked/expired → message says so.
+- `GET /api/dispatch/assigned?page=&pageSize=` (driver JWT) — my `Held`/`Delivered` deliveries only, as `List<DispatchOrderDto>`. `pageSize` is clamped to 1–100.
+- `POST /api/dispatch/orders/{id}/confirm` (driver JWT) `{ "otp": "<buyer code>" }` — marks `Delivered`, starts the 24h window, pays the rider fee instantly. Returns a `DispatchOrderDto`. Wrong code → 400; locked/expired → message says so.
+
+Both dispatch endpoints return **`DispatchOrderDto`**, not `OrderDto` — see [Order shapes](#order-shapes-whichever-dto-you-get). The rider app no longer receives `amountKobo`, `buyerEmail`, the Paystack virtual account, or any transfer reference.
 
 **Dispatcher WhatsApp (backend-sent, no frontend work).** On assignment the rider gets the order number, delivery address, fee, a `/track/{orderNumber}` link, and a nudge to the driver portal. If your rider login screen needs to be reachable from that message, point the portal link at your rider route — the backend does not deep-link into it.
 

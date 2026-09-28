@@ -4,4 +4,4 @@ using MediatR;
 
 namespace InstaSafe.Application.Features.Orders.Commands.ConfirmSatisfaction;
 
-public sealed record ConfirmSatisfactionCommand(Guid OrderId) : IRequest<Result<OrderDto>>;
+public sealed record ConfirmSatisfactionCommand(Guid OrderId) : IRequest<Result<PublicOrderDto>>;

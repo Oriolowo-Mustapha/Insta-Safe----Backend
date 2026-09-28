@@ -4,4 +4,4 @@ using MediatR;
 
 namespace InstaSafe.Application.Features.Orders.Commands.VerifyOtp;
 
-public sealed record VerifyOtpCommand(Guid OrderId, string Otp) : IRequest<Result<OrderDto>>;
+public sealed record VerifyOtpCommand(Guid OrderId, string Otp) : IRequest<Result<PublicOrderDto>>;

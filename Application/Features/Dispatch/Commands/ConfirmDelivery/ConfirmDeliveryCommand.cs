@@ -5,4 +5,4 @@ using MediatR;
 namespace InstaSafe.Application.Features.Dispatch.Commands.ConfirmDelivery;
 
 public sealed record ConfirmDeliveryCommand(Guid DispatcherId, string DriverPhone, Guid OrderId, string Otp)
-    : IRequest<Result<OrderDto>>;
+    : IRequest<Result<DispatchOrderDto>>;

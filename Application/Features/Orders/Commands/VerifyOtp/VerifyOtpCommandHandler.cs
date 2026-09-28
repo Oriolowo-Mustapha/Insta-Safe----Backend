@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace InstaSafe.Application.Features.Orders.Commands.VerifyOtp;
 
-public class VerifyOtpCommandHandler : IRequestHandler<VerifyOtpCommand, Result<OrderDto>>
+public class VerifyOtpCommandHandler : IRequestHandler<VerifyOtpCommand, Result<PublicOrderDto>>
 {
     private readonly IOrderRepository _orders;
     private readonly IAppDbContext _db;
@@ -28,17 +28,17 @@ public class VerifyOtpCommandHandler : IRequestHandler<VerifyOtpCommand, Result<
         _orders = orders; _db = db; _otp = otp; _paystack = paystack; _notifier = notifier; _mapper = mapper;
     }
 
-    public async Task<Result<OrderDto>> Handle(VerifyOtpCommand req, CancellationToken ct)
+    public async Task<Result<PublicOrderDto>> Handle(VerifyOtpCommand req, CancellationToken ct)
     {
         var order = await _orders.GetByIdAsync(req.OrderId, ct);
         if (order is null)
-            return Result<OrderDto>.Failure("Order not found.");
+            return Result<PublicOrderDto>.Failure("Order not found.");
         if (order.Status != OrderStatus.Held)
             throw new ConflictException($"Order is {order.Status}, OTP not expected.");
         if (order.Fulfillment == FulfillmentType.Dispatch && !string.IsNullOrWhiteSpace(order.DriverPhone))
-            return Result<OrderDto>.Failure("This order has an assigned dispatcher — confirm delivery from the driver portal.");
+            return Result<PublicOrderDto>.Failure("This order has an assigned dispatcher — confirm delivery from the driver portal.");
         if (order.OtpHash is null || !order.OtpHash.Contains('.'))
-            return Result<OrderDto>.Failure("No OTP pending for this order.");
+            return Result<PublicOrderDto>.Failure("No OTP pending for this order.");
         if (order.OtpExpiresAt is null || DateTimeOffset.UtcNow > order.OtpExpiresAt)
             throw new DomainValidationException("OTP has expired.");
         if (order.OtpAttempts >= 5)
@@ -81,6 +81,6 @@ public class VerifyOtpCommandHandler : IRequestHandler<VerifyOtpCommand, Result<
 
         await _notifier.ReleasedAsync(order, order.BuyerEmail, transferRef);
 
-        return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
+        return Result<PublicOrderDto>.Success(_mapper.Map<PublicOrderDto>(order));
     }
 }
