@@ -232,7 +232,7 @@ public class BankTransferTests : IDisposable
     }
 
     private MarkFundsHeldCommandHandler HeldHandler() => new(
-        Orders(), _db, _paystack, new FakeOtp(), new NullSender(), _mapper);
+        Orders(), _db, _paystack, new FakeOtp(), new NullSender(), Notifier(), _mapper);
 
     [Fact]
     public async Task MarkHeld_DvaPayment_MatchesByEmailAndAmount()

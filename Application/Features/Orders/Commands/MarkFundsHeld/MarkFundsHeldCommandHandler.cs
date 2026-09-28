@@ -1,6 +1,7 @@
 using AutoMapper;
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
+using InstaSafe.Application.Common.Notifications;
 using InstaSafe.Application.Features.Orders.DTOs;
 using InstaSafe.Domain.Entities;
 using InstaSafe.Domain.Enums;
@@ -17,13 +18,16 @@ public class MarkFundsHeldCommandHandler : IRequestHandler<MarkFundsHeldCommand,
     private readonly IPaystackClient _paystack;
     private readonly IOtpService _otp;
     private readonly IWhatsAppSender _wa;
+    private readonly OrderNotifier _notifier;
     private readonly IMapper _mapper;
 
     public MarkFundsHeldCommandHandler(
         IOrderRepository orders, IAppDbContext db,
-        IPaystackClient paystack, IOtpService otp, IWhatsAppSender wa, IMapper mapper)
+        IPaystackClient paystack, IOtpService otp, IWhatsAppSender wa,
+        OrderNotifier notifier, IMapper mapper)
     {
-        _orders = orders; _db = db; _paystack = paystack; _otp = otp; _wa = wa; _mapper = mapper;
+        _orders = orders; _db = db; _paystack = paystack; _otp = otp; _wa = wa;
+        _notifier = notifier; _mapper = mapper;
     }
 
     public async Task<Result<OrderDto>> Handle(MarkFundsHeldCommand req, CancellationToken ct)
@@ -74,6 +78,14 @@ public class MarkFundsHeldCommandHandler : IRequestHandler<MarkFundsHeldCommand,
                 $"InstaSafe: your delivery code is {code}. Share it with the rider only when you receive your item.", ct);
         }
         catch { /* outbox covers retry; MVP keeps webhook fast */ }
+
+        // The order is now Held, so /api/dispatch/assigned actually lists it.
+        // This is the first moment the rider can act on the assignment, so it
+        // is the first moment we tell them about it. The status guard above
+        // throws ConflictException on a replayed webhook, which keeps this
+        // send exactly-once. DriverAssignedAsync no-ops without a driver and
+        // swallows its own send failures.
+        await _notifier.DriverAssignedAsync(order);
 
         return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
     }

@@ -47,9 +47,9 @@ public static class ConversationTexts
         "1x Belt @5000";
     public const string AskAmount = "What is the total amount in naira? (numbers only, e.g. 50000)";
     public const string AskFulfillment =
-        "Does this order need a dispatch rider?\n" +
-        "1️⃣ YES — physical delivery (rider confirms with buyer OTP)\n" +
-        "2️⃣ NO — digital/pickup (buyer confirms on the track page)\n" +
+        "How will this order reach the buyer?\n" +
+        "1️⃣ Dispatch rider — we assign a rider, they collect and hand over\n" +
+        "2️⃣ Self-delivery — you'll hand it over yourself\n" +
         "Reply 1 or 2.";
     public const string AskDeliveryFee =
         "Agreed delivery fee in naira? (numbers only, e.g. 5000 — send 0 if no dispatch rider)";

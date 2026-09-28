@@ -423,12 +423,16 @@ public class ConversationRouter
             next, ct, draft);
     }
 
-    private static Domain.Enums.FulfillmentType? ParseFulfillmentHint(string? hint)
+    /// <summary>
+    /// Digital is disabled, so a hint only distinguishes rider from self-deliver.
+    /// Anything unrecognised (including "digital") means a rider.
+    /// </summary>
+    private static Domain.Enums.FulfillmentType ParseFulfillmentHint(string? hint)
     {
         var h = (hint ?? "").Trim().ToLowerInvariant();
-        if (h.StartsWith("digit")) return Domain.Enums.FulfillmentType.Digital;
-        if (h.StartsWith("dispatch")) return Domain.Enums.FulfillmentType.Dispatch;
-        return null;
+        if (h.StartsWith("self") || h.StartsWith("pickup") || h.StartsWith("own"))
+            return Domain.Enums.FulfillmentType.SelfDelivery;
+        return Domain.Enums.FulfillmentType.Dispatch;
     }
 
     private async Task HandleItemsStepAsync(
@@ -490,19 +494,14 @@ public class ConversationRouter
     private async Task HandleFulfillmentStepAsync(
         Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
     {
+        // The vendor states which flow they are in: a rider, or they hand it
+        // over themselves. A rider needs driver details; self-delivery does not.
         var t = text.Trim().ToUpperInvariant();
-        if (t is "1" or "YES" or "Y" or "DISPATCH" or "RIDER" or "DELIVERY")
-        {
-            draft = draft with { Fulfillment = Domain.Enums.FulfillmentType.Dispatch };
-            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDeliveryFee,
-                Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
-            return;
-        }
-        if (t is "2" or "NO" or "N" or "DIGITAL" or "PICKUP")
+        if (t is "2" or "SELF" or "SELFDELIVERY" or "SELF-DELIVERY" or "MYSELF" or "PICKUP" or "NO")
         {
             draft = draft with
             {
-                Fulfillment = Domain.Enums.FulfillmentType.Digital,
+                Fulfillment = Domain.Enums.FulfillmentType.SelfDelivery,
                 DeliveryFeeNgn = 0,
                 DriverPhone = "",
                 DriverAccountNumber = "",
@@ -511,6 +510,21 @@ public class ConversationRouter
                 DriverHolderName = ""
             };
             await AdvanceAsync(state, phone, replyTo, draft, ct);
+            return;
+        }
+        if (t is "1" or "YES" or "Y" or "DISPATCH" or "RIDER" or "DELIVERY")
+        {
+            draft = draft with
+            {
+                Fulfillment = Domain.Enums.FulfillmentType.Dispatch,
+                DriverPhone = "",
+                DriverAccountNumber = "",
+                DriverBankCode = "",
+                DriverBankName = "",
+                DriverHolderName = ""
+            };
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDeliveryFee,
+                Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
             return;
         }
         await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskFulfillment,
@@ -1111,7 +1125,9 @@ public class ConversationRouter
             draft.ItemsSummary(), draft.TotalNgn,
             draft.DeliveryFeeNgn, draft.DriverPhone, draft.DriverBankName,
             draft.DriverHolderName, draft.BuyerEmail,
-            draft.Fulfillment == Domain.Enums.FulfillmentType.Digital ? "digital (no rider)" : "dispatch rider");
+            draft.Fulfillment == Domain.Enums.FulfillmentType.SelfDelivery
+                ? "self-delivery (you deliver)"
+                : "dispatch rider");
 
     private static Domain.Entities.ConversationStep FirstMissingStep(OrderDraft draft)
     {

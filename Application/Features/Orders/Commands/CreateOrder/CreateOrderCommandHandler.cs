@@ -60,7 +60,10 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
             Currency = "NGN",
             Status = OrderStatus.AwaitingPayment,
             Fulfillment = req.Fulfillment,
-            DeliveryFeeKobo = req.Fulfillment == FulfillmentType.Digital ? 0 : req.DeliveryFeeNgn * 100,
+            // Digital is disabled, so the fee is always the dispatch fee. A
+            // dispatch order with a 0 fee is legal: that is the driver-less
+            // case, released by the buyer entering their OTP.
+            DeliveryFeeKobo = req.DeliveryFeeNgn * 100,
             OrderNumber = await NextOrderNumberAsync(ct)
         };
 
@@ -129,8 +132,12 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
 
         await _notifier.OrderCreatedAsync(order, OrderNotifier.IsRealEmail(order.BuyerEmail) ? order.BuyerEmail : null);
         await _notifier.PaymentLinkAsync(order);
-        if (order.DriverPhone is not null)
-            await _notifier.DriverAssignedAsync(order);
+
+        // The rider is NOT notified here. /api/dispatch/assigned only lists
+        // Held|Delivered, so notifying at creation (status AwaitingPayment) told
+        // the rider they had a delivery while the portal showed nothing. The
+        // assignment message is sent from MarkFundsHeld instead, once escrow
+        // actually holds the buyer's money and the order is visible to the rider.
 
         return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
     }

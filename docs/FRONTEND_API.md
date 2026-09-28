@@ -5,13 +5,41 @@ Local: `http://localhost:5080` · Interactive reference: `/swagger/index.html`
 
 Frontend origin (production): `https://instasafe-six.vercel.app`
 
-## What changed since the last handoff
+## Recent changes
 
-Read this section first — it is the delta.
+This section is rewritten each time the contract changes. It lists only what is
+current — older deltas are deleted, not appended to.
 
-### ⚠️ BREAKING: three order shapes now exist
+### ⚠️ BREAKING: two fulfilment types, and the vendor now picks
 
-There used to be one `OrderDto` for every surface. There are now three, chosen per endpoint:
+`fulfillment` is a **number** and the vendor states which flow they are in:
+
+| `fulfillment` | Name | Meaning |
+|---|---|---|
+| `0` | `Dispatch` | A **rider** carries it. `driverPhone` + rider bank details are **required**. |
+| `2` | `SelfDelivery` | The **vendor hands it over in person**. `driverPhone` must be **absent**. |
+| `1` | `Digital` | **Disabled** → `400`, error code `fulfillment.unsupported` |
+
+The vendor dashboard must present this as a choice when creating an order, and
+send `0` or `2`. The WhatsApp bot asks the same question (`1` = dispatch rider,
+`2` = self-delivery) and only asks for rider details on the rider path.
+
+Validation rejects the ambiguous middle, which is the point:
+
+| Request | Result |
+|---|---|
+| `fulfillment: 0` with no `driverPhone` | `400` · `fulfillment.dispatch_needs_rider` |
+| `fulfillment: 2` **with** a `driverPhone` | `400` · `fulfillment.selfdelivery_no_rider` |
+| `fulfillment: 1` or any unknown value | `400` · `fulfillment.unsupported` |
+
+Because fulfilment is now explicit, **`hasDriver` is no longer needed on
+`PublicOrderDto`** — `fulfillment` alone tells the track page which flow it is in.
+
+Also because of this:
+- `POST /api/orders/{id}/confirm-satisfaction` is **legacy**. It only ever accepted a Digital order, so it cannot succeed on any new order. **Stop building it.** The buyer's one release action is `verify-otp`.
+- The track page shows **one** button, not two.
+
+### ⚠️ BREAKING: three order shapes
 
 | DTO | Used by | Auth |
 |---|---|---|
@@ -19,27 +47,72 @@ There used to be one `OrderDto` for every surface. There are now three, chosen p
 | `PublicOrderDto` | Public track page + guest actions | **none** |
 | `DispatchOrderDto` | Rider portal | driver JWT |
 
-**If you read fields off the track page or the rider app, you must re-check them — the response is a different, smaller object.** Nothing was renamed; fields were *removed*. Details and the exact field lists are in [Order shapes](#order-shapes-whichever-dto-you-get).
+`PublicOrderDto` deliberately omits `vendorPhone`, `customerPhone`, `buyerEmail`, every Paystack/transfer/refund reference, the payment auth URL, the escrow virtual account, and the driver fields. The track endpoints are anonymous and the order number is the only credential, so a leaked link used to hand over buyer contact details and everything payable.
 
-Affected endpoints:
-- `GET /api/orders/by-reference/{ref}` → `PublicOrderDto` **(breaking)**
-- `POST /api/orders/{id}/verify-otp` → `PublicOrderDto` **(breaking)**
-- `POST /api/orders/{id}/confirm-satisfaction` → `PublicOrderDto` **(breaking)**
-- `POST /api/orders/{id}/dispute` → `PublicOrderDto` **(breaking)**
-- `GET /api/dispatch/assigned` → `List<DispatchOrderDto>` **(breaking)**
-- `POST /api/dispatch/orders/{id}/confirm` → `DispatchOrderDto` **(breaking)**
+### Money release: two shapes, one rule
 
-Why: the track endpoints are anonymous and the order number is the only credential, so returning the full DTO let anyone holding a leaked link read buyer contact details, the Paystack virtual account number, and the payment auth URL. The rider portal had the same problem by handing a third party the buyer's email and the escrow internals. The new shapes are deliberately minimal per audience.
+Funds move when the buyer's code is used — by whoever is doing the handover:
 
-### The rest of the delta
+| `fulfillment` | Who releases | How | Auto-release backstop |
+|---|---|---|---|
+| `0` Dispatch (rider) | **Rider** | `POST /api/dispatch/orders/{id}/confirm` with the buyer's code → `Delivered` | 24h after `Delivered`; the buyer may dispute first |
+| `2` SelfDelivery | **Buyer** | `POST /api/orders/{id}/verify-otp` with their own code → `Released` | 24h after `Held` |
 
-1. **`/track/{orderNumber}` is now a required frontend route.** The backend puts a live link in the buyer's payment-link WhatsApp, bank-transfer WhatsApp, status emails, **and the dispatcher's assignment WhatsApp**. See [The `/track/{orderNumber}` page](#the-trackordernumber-page).
-2. **`GET /api/admin/orders`** gained `?q=` (search by order number or Paystack reference).
-3. **`POST /api/admin/orders/{id}/retry-payout`** is new (admin only).
-4. **`GET /api/payments/banks`** now returns the complete Nigerian bank list in one call (no paging, no truncation) — call it once and cache.
-5. `OrderDto` now always includes `orderNumber` (`IS-XXXXXX`).
+The self-delivery backstop is a safety net, not the main path: nobody else can
+confirm a self-delivery, so a buyer who never enters their code would otherwise be
+stuck in escrow forever. Rider orders are deliberately excluded — those still
+require the rider to confirm, and an unactioned rider is an operations problem.
 
-The only breaking changes are the six DTO swaps above. No route, HTTP method, envelope, status code, or field name changed.
+### Guest-action state gates
+
+**Gate the UI on this table.** Each action validates independently and returns
+`409`/`400` if the order is not in a valid state, so a button rendered outside
+these gates is a guaranteed failure on click.
+
+| Action | Valid `status` | Extra gate | Rejection |
+|---|---|---|---|
+| `verify-otp` | **`Held` only** | `fulfillment` must be `2` (SelfDelivery) | `409 "Order is <Status>, OTP not expected."` / `400 "This order has an assigned dispatcher — confirm delivery from the driver portal."` |
+| `dispute` | `Held` **or** `Delivered` | — | `409 "Cannot dispute from status <Status>."` |
+| `confirm-satisfaction` | legacy — Digital only | unreachable for new orders | `400` |
+
+Two things that bite, both of them a `409` on click:
+
+- **`verify-otp` is `Held`-only, not `Held`/`Delivered`.** `Delivered` is already inside the 24h inspection window, where the right action is `dispute` or nothing.
+- **`verify-otp` is SelfDelivery-only.** A rider order is released by that rider; asking the buyer to enter their own code on a rider order always fails.
+
+```ts
+const SELF_DELIVERY = 2;
+const Held = 2;          // OrderStatus.Held
+const canVerifyOtp = (o) => o.status === Held && o.fulfillment === SELF_DELIVERY;
+```
+
+What each state should render:
+
+| State | Track page shows |
+|---|---|
+| `Held` + `SelfDelivery` | Verify code + Dispute |
+| `Held` + `Dispatch` | "A rider is handling this delivery" + Dispute |
+| `Delivered` (either) | `releaseDueAt` countdown + Dispute |
+| `Released` / `Refunded` / `Disputed` / `Cancelled` | timeline only |
+
+Do not map a `409` onto the panel. `409` means the gate above was wrong, and
+passing the raw API string through leaks the state machine to buyers.
+
+### Other current changes
+1. **`/track/{orderNumber}` is a required frontend route.** The backend puts a live link in the buyer's payment-link WhatsApp, bank-transfer WhatsApp, status emails, **and the dispatcher's assignment WhatsApp**. The dispatcher link is sent on **payment confirmation**, matching the `Held`/`Delivered` filter on `GET /api/dispatch/assigned`.
+2. `GET /api/admin/orders` accepts `?q=` (order number or Paystack reference).
+3. `POST /api/admin/orders/{id}/retry-payout` is new (admin only).
+4. `GET /api/payments/banks` returns the complete Nigerian bank list in one call — call once and cache.
+5. `OrderDto` always includes `orderNumber` (`IS-XXXXXX`).
+
+No route, HTTP method, envelope, status code, or field name changed. The breaking
+changes are the DTO swaps, the fulfilment types, and the guest-action gates above.
+
+### Open items — needed from the frontend
+- **The real frontend origin.** `Frontend:BaseUrl` is empty locally, so the track link is currently omitted from every message. Two candidate values are in the repo (`app.instasafe.ng` in `.env.example`, `instasafe-six.vercel.app` in this file) and neither is confirmed.
+- **Whether `/track/[orderNumber]` is the exact route** (casing and segment).
+- **Paths for the routes the bot prose-references but never links:** vendor dashboard, driver portal, admin console.
+
 
 
 ## Conventions
@@ -85,7 +158,10 @@ Nigerian mobiles, canonical `234...` form everywhere. The API normalizes `080...
 
 ### OrderStatus
 `Draft | AwaitingPayment | Held | Delivered | Released | Refunded | Disputed | Cancelled`
-(New: `Delivered = 7`, funds frozen in 24h inspection window.)
+
+**Numeric values matter — the API serialises the enum as a number, not a string.**
+`Draft 0 · AwaitingPayment 1 · Held 2 · Released 3 · Refunded 4 · Disputed 5 · Cancelled 6 · Delivered 7`
+Note `Delivered` is `7`, not `3`. All comparisons must use the numbers above.
 
 ---
 
@@ -226,7 +302,8 @@ All vendor JWT, own id only (else `403`):
   "items": [{ "description": "Sneakers", "quantity": 2, "unitPriceNgn": 22500 }]
 }
 ```
-- `fulfillment`: `0` = Dispatch (rider + OTP + 24h window), `1` = Digital (buyer Satisfied-button flow; fee must be `0`).
+- `fulfillment`: `0` = Dispatch (rider — `driverPhone` + rider bank details required), `2` = SelfDelivery (you deliver; `driverPhone` must be omitted). `1` (Digital) is disabled. See [fulfilment types](#-breaking-two-fulfilment-types-and-the-vendor-now-picks).
+- `deliveryFeeNgn` is the **rider's** fee. For a Dispatch order it is what the rider is paid on arrival. Self-delivery orders carry no rider, so it must be `0`; whatever you charge the buyer for delivery is simply part of `amountNgn`.
 - Buyer charged `amountNgn + deliveryFeeNgn`. Vendor bank falls back to stored payout details when omitted; **driver bank must be supplied per order** (drivers hold no stored details).
 - `buyerEmail` must be real — receipts + status mails go there. `customerPhone` must be a WhatsApp number — the payment link goes there by chat + mail.
 - Returns `orderNumber` (`IS-XXXXXX`, show it everywhere), `paystackAuthUrl` (card/link payment) + `paystackReference`.
@@ -247,13 +324,18 @@ All vendor JWT, own id only (else `403`):
 - `POST /api/orders/{id}/resolve-dispute` `{ "resolution": "release" | "refund" }` — resolve a frozen dispute.
 
 ### Buyer/guest actions (all **Public**, no token)
-These power the track page. The order number is the only credential; OTPs expire (24h) and lock after 5 tries. All five return **`PublicOrderDto`** (see [Order shapes](#order-shapes-whichever-dto-you-get)) — not `OrderDto`.
+These power the track page. The order number is the only credential; OTPs expire (24h) and lock after 5 tries. All return **`PublicOrderDto`** (see [Order shapes](#order-shapes-whichever-dto-you-get)) — not `OrderDto`.
 - `GET /api/orders/by-reference/{ref}` — order detail (`ref` = order number, Paystack reference, or order id)
 - `GET /api/orders/by-reference/{ref}/timeline` — ordered tracker events:
   `created → payment_pending → funds_held → delivered (+inspection deadline) → released/refunded/disputed`, each `{ key, label, at }`. Render this list as the tracker UI. Returns `OrderTimelineDto` (unchanged).
-- `POST /api/orders/{id}/confirm-satisfaction` — digital orders: buyer confirms → instant release
-- `POST /api/orders/{id}/dispute` `{ "reason": "..." }` — freezes funds (`Held`/`Delivered` only)
-- `POST /api/orders/{id}/verify-otp` `{ "otp": "123456" }` — legacy/rider path: releases digital orders and driver-less dispatch orders. Orders **with** an assigned driver must use the driver portal below.
+- `POST /api/orders/{id}/verify-otp` `{ "otp": "123456" }` — **the buyer's release action, for self-delivery orders only.** A rider order is released by its rider in the driver portal below.
+- `POST /api/orders/{id}/dispute` `{ "reason": "..." }` — freezes funds
+- `POST /api/orders/{id}/confirm-satisfaction` — **legacy, Digital only. Unreachable for new orders. Do not build it.**
+
+Which statuses and shapes each action accepts is specified once, in
+[Guest-action state gates](#guest-action-state-gates) near the top. That table is
+the contract; the prose here is orientation only.
+
 
 Vendor and admin surfaces return the full `OrderDto`: `id, vendorPhone, customerName, customerPhone, buyerEmail, deliveryAddress, items[{description,quantity,unitPriceKobo}], amountKobo, currency, status, paystackReference, paystackAuthUrl, heldAt, releasedAt, transferReference, refundReference, fulfillment, deliveryFeeKobo, driverPhone, driverTransferReference, deliveredAt, releaseDueAt, disputeReason, payVirtualAccountNumber/Bank, orderNumber`.
 
@@ -287,25 +369,25 @@ Behaviour notes:
 
 - `POST /api/dispatch/request-code` **(Public)** `{ "phone": "..." }` — works for **any** phone (row auto-created). Code via WhatsApp, 10-min expiry.
 - `POST /api/dispatch/verify-code` **(Public)** → `{ token, dispatcher, expiresInHours }`.
-- `GET /api/dispatch/assigned?page=&pageSize=` (driver JWT) — my `Held`/`Delivered` deliveries only, as `List<DispatchOrderDto>`. `pageSize` is clamped to 1–100.
+- `GET /api/dispatch/assigned?page=&pageSize=` (driver JWT) — my `Held`/`Delivered` deliveries only, as `List<DispatchOrderDto>`. `pageSize` is clamped to 1–100. An order appears here the moment its payment is confirmed; before that the order is `AwaitingPayment` and is intentionally absent (the rider is not messaged yet either). So an empty list is correct, not a bug, when nothing has been paid.
 - `POST /api/dispatch/orders/{id}/confirm` (driver JWT) `{ "otp": "<buyer code>" }` — marks `Delivered`, starts the 24h window, pays the rider fee instantly. Returns a `DispatchOrderDto`. Wrong code → 400; locked/expired → message says so.
 
 Both dispatch endpoints return **`DispatchOrderDto`**, not `OrderDto` — see [Order shapes](#order-shapes-whichever-dto-you-get). The rider app no longer receives `amountKobo`, `buyerEmail`, the Paystack virtual account, or any transfer reference.
 
-**Dispatcher WhatsApp (backend-sent, no frontend work).** On assignment the rider gets the order number, delivery address, fee, a `/track/{orderNumber}` link, and a nudge to the driver portal. If your rider login screen needs to be reachable from that message, point the portal link at your rider route — the backend does not deep-link into it.
+**Dispatcher WhatsApp (backend-sent, no frontend work).** On **payment confirmation** (not order creation) the rider gets the order number, delivery address, fee, a `/track/{orderNumber}` link, and a nudge to the driver portal. This deliberately matches `GET /api/dispatch/assigned`, which lists only `Held`/`Delivered` orders — so by the time the rider is told, the job is already visible in the portal. An order still awaiting payment is **not** listed and the rider is **not** messaged. If your rider login screen needs to be reachable from that message, point the portal link at your rider route — the backend does not deep-link into it.
 
 ---
 
 ## 6. End-to-end flows for the UI
 
 **Vendor onboarding:** register → verify-email → payout → login → dashboard. Gate on the two flags.
-**Sell:** create order → show buyer `paystackAuthUrl` (card) and/or `request-bank-transfer` details → buyer pays → `Held` (buyer gets OTP) → dispatch confirm → `Delivered` (24h window) → auto-release (worker) or dispute → resolve.
-**Track page (public):** route `/track/{orderNumber}` → `by-reference/{orderNumber}` for header facts + `by-reference/{orderNumber}/timeline` for the stepper; dispute + confirm-satisfaction buttons call the guest endpoints. Also linked from the dispatcher's assignment WhatsApp.
+**Sell:** create order, picking `fulfillment` → show buyer `paystackAuthUrl` (card) and/or `request-bank-transfer` details → buyer pays → `Held` (buyer gets OTP) → **rider confirms** → `Delivered` (24h window) → auto-release or dispute → resolve. A self-delivery order instead goes `Held` → the buyer releases it from the track page with their own code.
+**Track page (public):** route `/track/{orderNumber}` → `by-reference/{orderNumber}` for header facts + `by-reference/{orderNumber}/timeline` for the stepper. **Dispute** always; the verify panel only for `Held` self-delivery orders. No satisfaction button. Also linked from the dispatcher's assignment WhatsApp.
 **Driver app:** request-code → verify-code → assigned list → confirm with buyer OTP.
 
 ## 7. WhatsApp bot (for context, not frontend work)
 **Vendor-only.** The bot answers verified + onboarded vendors and no one else: unknown/unverified/deactivated/unfinished-onboarding senders get **silence** (logged to the audit trail, never replied to). Buyers are served purely through notifications (payment link, OTP, delivered, released, refunded) + the public track page — a buyer replying to the bot gets no answer by design. (If a vendor changes SIM, fix via `PUT /api/vendors/{id}/phone` on web.)
-Menu: create link (guided: customer → phone → buyer email → address → items → amount → fee → driver phone/account/**bank name** → holder confirm → order confirm), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), track (short status), help. `BACK`/`EDIT` steps back to the previous answered question; `MENU`/`CANCEL` preserve the draft as a ticket. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
+Menu: create link (guided: customer → phone → buyer email → address → items → amount → **how it reaches the buyer (1 dispatch rider / 2 self-delivery)** → fee → driver phone/account/**bank name** → holder confirm → order confirm; the self-delivery path skips every driver question), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), track (short status), help. `BACK`/`EDIT` steps back to the previous answered question; `MENU`/`CANCEL` preserve the draft as a ticket. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
 
 ---
 

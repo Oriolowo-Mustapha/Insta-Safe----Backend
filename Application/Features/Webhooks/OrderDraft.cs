@@ -28,7 +28,14 @@ public sealed record OrderDraft(
         if (string.IsNullOrWhiteSpace(json)) return Empty();
         try
         {
-            return JsonSerializer.Deserialize<OrderDraft>(json) ?? Empty();
+            var draft = JsonSerializer.Deserialize<OrderDraft>(json) ?? Empty();
+            // Digital is disabled. Drafts saved before that carry
+            // Fulfillment=Digital; coerce to a rider so the vendor can finish
+            // the ticket instead of hitting a rejected order. A null is left
+            // alone so the delivery-type question is asked on resume.
+            return draft.Fulfillment == Domain.Enums.FulfillmentType.Digital
+                ? draft with { Fulfillment = FulfillmentType.Dispatch }
+                : draft;
         }
         catch
         {
@@ -38,7 +45,7 @@ public sealed record OrderDraft(
 
     public string Save() => JsonSerializer.Serialize(this);
 
-    public bool WantsDispatch => DeliveryFeeNgn > 0 || !string.IsNullOrWhiteSpace(DriverPhone);
+    public bool WantsDispatch => Fulfillment == FulfillmentType.Dispatch;
 
     public string MissingFields()
     {

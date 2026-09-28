@@ -6,9 +6,11 @@ using InstaSafe.Application.Features.Dispatch.Commands.ConfirmDelivery;
 using InstaSafe.Application.Features.Orders.Commands.ConfirmSatisfaction;
 using InstaSafe.Application.Features.Orders.Commands.DisputeOrder;
 using InstaSafe.Application.Features.Orders.Commands.ResolveDispute;
+using InstaSafe.Application.Features.Orders.Commands.VerifyOtp;
 using InstaSafe.Application.Mapping;
 using InstaSafe.Domain.Entities;
 using InstaSafe.Domain.Enums;
+using InstaSafe.Domain.Exceptions;
 using InstaSafe.Infrastructure.Persistence;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -266,6 +268,164 @@ public class DeliveryFlowTests : IDisposable
         Assert.True(result.IsSuccess);
         Assert.Equal(OrderStatus.Released, order.Status);
         Assert.Equal(2000000, _paystack.Transfers[^1].Amount);
+    }
+
+    // ---------------------------------------------------------------------
+    // Guest-action state gates.
+    //
+    // The track page is anonymous, so the frontend cannot probe these states
+    // and used to infer them from prose. Two of them (verify-otp and
+    // confirm-satisfaction) are Held-ONLY, which is not what a reader of
+    // "dispute is Held/Delivered" would assume. These pin the real contract
+    // so the UI gates and docs/FRONTEND_API.md cannot drift from the handlers.
+    // ---------------------------------------------------------------------
+
+    private static Order DigitalHeldOrder() => new()
+    {
+        VendorPhone = "0801",
+        CustomerName = "Chidi",
+        CustomerPhone = "0802",
+        DeliveryAddress = "Email delivery",
+        AmountKobo = 2000000,
+        Fulfillment = FulfillmentType.Digital,
+        Status = OrderStatus.Held,
+        OrderNumber = "IS-DIGITAL",
+        PaystackReference = "ref-digital",
+        VendorRecipientCode = "RCP_VENDOR",
+        OtpHash = "HASH:testsalt12345678:123456.testsalt12345678",
+        OtpExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+    };
+
+    private VerifyOtpCommandHandler VerifyHandler() =>
+        new(_orders, _db, _otp, _paystack, Notifier(), _mapper);
+
+    private async Task<Order> SeedAsync(Order order)
+    {
+        await _orders.AddAsync(order, CancellationToken.None);
+        await _orders.SaveAsync(CancellationToken.None);
+        return order;
+    }
+
+    [Fact]
+    public async Task VerifyOtp_DeliveredOrder_Conflicts()
+    {
+        // The exact case the track page hit: Delivered renders the verify
+        // panel, then the endpoint rejects it. Held-only, never Delivered.
+        var order = DigitalHeldOrder();
+        order.Status = OrderStatus.Delivered;
+        order.DeliveredAt = DateTimeOffset.UtcNow;
+        await SeedAsync(order);
+
+        var ex = await Assert.ThrowsAsync<ConflictException>(
+            () => VerifyHandler().Handle(new VerifyOtpCommand(order.Id, "123456"), CancellationToken.None));
+
+        Assert.Contains("Delivered", ex.Message);
+        Assert.Equal(OrderStatus.Delivered, order.Status);
+        Assert.Empty(_paystack.Transfers);
+    }
+
+    [Fact]
+    public async Task VerifyOtp_HeldDigitalOrder_Releases()
+    {
+        // Proves Held IS accepted, so the track page's gate is Held-only.
+        var order = await SeedAsync(DigitalHeldOrder());
+
+        var result = await VerifyHandler().Handle(new VerifyOtpCommand(order.Id, "123456"), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(OrderStatus.Released, order.Status);
+        Assert.Equal(2000000, _paystack.Transfers[^1].Amount);
+    }
+
+    [Fact]
+    public async Task VerifyOtp_HeldDispatchWithDriver_Rejected_PointAtDriverPortal()
+    {
+        var order = DispatchHeldOrder();
+        order.DriverPhone = "0803";
+        await SeedAsync(order);
+
+        var result = await VerifyHandler().Handle(new VerifyOtpCommand(order.Id, "123456"), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("driver portal", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(_paystack.Transfers);
+    }
+
+    [Fact]
+    public async Task VerifyOtp_HeldDispatchWithoutDriver_Releases()
+    {
+        var order = DispatchHeldOrder();
+        order.DriverPhone = null;
+        await SeedAsync(order);
+
+        var result = await VerifyHandler().Handle(new VerifyOtpCommand(order.Id, "123456"), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(OrderStatus.Released, order.Status);
+    }
+
+    [Fact]
+    public async Task ConfirmSatisfaction_DeliveredOrder_Conflicts()
+    {
+        // Second easy mistake: Held-only, not Held/Delivered.
+        var order = DigitalHeldOrder();
+        order.Status = OrderStatus.Delivered;
+        await SeedAsync(order);
+
+        var ex = await Assert.ThrowsAsync<ConflictException>(
+            () => new ConfirmSatisfactionCommandHandler(_orders, _db, _paystack, Notifier(), _mapper)
+                .Handle(new ConfirmSatisfactionCommand(order.Id), CancellationToken.None));
+
+        Assert.Contains("Delivered", ex.Message);
+        Assert.Empty(_paystack.Transfers);
+    }
+
+    [Fact]
+    public async Task ConfirmSatisfaction_DispatchOrder_Rejected()
+    {
+        var order = DispatchHeldOrder();
+        await SeedAsync(order);
+
+        var result = await new ConfirmSatisfactionCommandHandler(_orders, _db, _paystack, Notifier(), _mapper)
+            .Handle(new ConfirmSatisfactionCommand(order.Id), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("digital", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Held)]
+    [InlineData(OrderStatus.Delivered)]
+    public async Task Dispute_AcceptsHeldAndDelivered(OrderStatus status)
+    {
+        var order = DigitalHeldOrder();
+        order.Status = status;
+        await SeedAsync(order);
+
+        var result = await new DisputeOrderCommandHandler(_orders, new PassSanitizer(), Notifier(), _mapper)
+            .Handle(new DisputeOrderCommand(order.Id, "not as described"), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(OrderStatus.Disputed, order.Status);
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Released)]
+    [InlineData(OrderStatus.AwaitingPayment)]
+    [InlineData(OrderStatus.Refunded)]
+    [InlineData(OrderStatus.Draft)]
+    [InlineData(OrderStatus.Cancelled)]
+    public async Task Dispute_RejectsEveryOtherStatus(OrderStatus status)
+    {
+        var order = DigitalHeldOrder();
+        order.Status = status;
+        await SeedAsync(order);
+
+        await Assert.ThrowsAsync<ConflictException>(
+            () => new DisputeOrderCommandHandler(_orders, new PassSanitizer(), Notifier(), _mapper)
+                .Handle(new DisputeOrderCommand(order.Id, "too late"), CancellationToken.None));
+
+        Assert.Equal(status, order.Status);
     }
 }
 

@@ -299,9 +299,7 @@ public class ConversationRouterTests
         Assert.Equal(ConversationStep.DraftItems, State(phone).Step);
         await Send(phone, "2x Sneakers @22500");
         Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
-        await Send(phone, "1");
-        Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
-        await Send(phone, "0");
+        await Send(phone, "2");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
         Assert.Contains("Please confirm", _sender.LastBody);
 
@@ -366,15 +364,21 @@ public class ConversationRouterTests
     }
 
     [Fact]
-    public async Task StepByStep_SkipDriver_ClearsFee()
+    public async Task StepByStep_SelfDelivery_SkipsRiderQuestions()
     {
+        // Choosing self-delivery must never ask for rider phone/account/bank.
         const string phone = "08010000011";
         _parser.NextParsed = new ParsedOrder("", "", "",
             new List<ParsedItem> { new("Sneakers", 2, 22500) }, 45000);
-        _mediator.OnCreateOrder = cmd => Result<OrderDto>.Success(new OrderDto(
-            Guid.NewGuid(), cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
-            cmd.DeliveryAddress, new(), 4500000, "NGN", OrderStatus.AwaitingPayment,
-            "ref-1", "https://pay.test/ref-1", null, null, null));
+        CreateOrderCommand? captured = null;
+        _mediator.OnCreateOrder = cmd =>
+        {
+            captured = cmd;
+            return Result<OrderDto>.Success(new OrderDto(
+                Guid.NewGuid(), cmd.VendorPhone, cmd.CustomerName, cmd.CustomerPhone,
+                cmd.DeliveryAddress, new(), 4500000, "NGN", OrderStatus.AwaitingPayment,
+                "ref-1", "https://pay.test/ref-1", null, null, null));
+        };
 
         await Send(phone, "1");
         await Send(phone, "Chidi");
@@ -383,13 +387,16 @@ public class ConversationRouterTests
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
         Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
-        await Send(phone, "1");
-        await Send(phone, "5000");
-        await Send(phone, "skip");
+        await Send(phone, "2");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
+        Assert.Contains("self-delivery", _sender.LastBody);
 
         await Send(phone, "YES");
+
         Assert.Contains("Order created", _sender.LastBody);
+        Assert.Equal(FulfillmentType.SelfDelivery, captured!.Fulfillment);
+        Assert.Equal(0, captured.DeliveryFeeNgn);
+        Assert.True(string.IsNullOrWhiteSpace(captured.DriverPhone));
     }
 
     [Fact]
@@ -407,8 +414,7 @@ public class ConversationRouterTests
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
         Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
-        await Send(phone, "1");
-        await Send(phone, "0");
+        await Send(phone, "2");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
 
         await Send(phone, "YES");
@@ -446,8 +452,7 @@ public class ConversationRouterTests
         await Send(phone, "chidi@example.com");
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
-        await Send(phone, "1");
-        await Send(phone, "0");
+        await Send(phone, "2");
 
         _sender.FailNextSend = true;
         await Send(phone, "YES");
@@ -512,6 +517,7 @@ public class ConversationRouterTests
         await Send(phone, "2x Sneakers @22500");
         Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
         await Send(phone, "1");
+        Assert.Equal(ConversationStep.DraftDeliveryFee, State(phone).Step);
         await Send(phone, "5000");
         await Send(phone, "08055556666");
         await Send(phone, "0123456789");
@@ -761,8 +767,10 @@ public class ConversationRouterTests
     }
 
     [Fact]
-    public async Task Fulfillment_Digital_SkipsFeeAndDriver()
+    public async Task Fulfillment_AsksRiderOrSelfDelivery()
     {
+        // The vendor states which flow they are in. Rider leads to the fee and
+        // then the rider's bank details; self-delivery goes straight to confirm.
         const string phone = "08010000040";
         _parser.NextParsed = new ParsedOrder("", "", "",
             new List<ParsedItem> { new("Ebook", 1, 5000) }, 5000);
@@ -780,54 +788,69 @@ public class ConversationRouterTests
         await Send(phone, "Chidi");
         await Send(phone, "08087654321");
         await Send(phone, "chidi@example.com");
-        await Send(phone, "Email delivery");
+        await Send(phone, "Lekki");
         await Send(phone, "1x Ebook @5000");
         Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
-        Assert.Contains("dispatch rider", _sender.LastBody);
+        Assert.Contains("Self-delivery", _sender.LastBody);
+        Assert.DoesNotContain("digital", _sender.LastBody, StringComparison.OrdinalIgnoreCase);
 
         await Send(phone, "2");
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
-        Assert.Contains("digital", _sender.LastBody);
+        Assert.Contains("self-delivery", _sender.LastBody);
 
         await Send(phone, "YES");
 
         Assert.NotNull(captured);
-        Assert.Equal(FulfillmentType.Digital, captured!.Fulfillment);
+        Assert.Equal(FulfillmentType.SelfDelivery, captured!.Fulfillment);
         Assert.Equal(0, captured.DeliveryFeeNgn);
         Assert.Contains("Order created", _sender.LastBody);
     }
 
     [Fact]
-    public async Task Fulfillment_Garbage_Reasks()
+    public void LegacyDigitalDraft_ResumesAsDispatch()
     {
-        const string phone = "08010000041";
-        _parser.NextParsed = new ParsedOrder("", "", "",
-            new List<ParsedItem> { new("Ebook", 1, 5000) }, 5000);
+        // A ticket saved before Digital was disabled must not be able to
+        // create a rejected order when the vendor resumes it.
+        var legacy = OrderDraft.Load(
+            "{\"CustomerName\":\"Chidi\",\"CustomerPhone\":\"2348087654321\"," +
+            "\"Address\":\"Lekki\",\"Items\":[{\"Description\":\"Ebook\",\"Quantity\":1,\"UnitPriceNgn\":5000}]," +
+            "\"TotalNgn\":5000,\"Fulfillment\":1}");
 
-        await Send(phone, "1");
-        await Send(phone, "Chidi");
-        await Send(phone, "08087654321");
-        await Send(phone, "chidi@example.com");
-        await Send(phone, "Email delivery");
-        await Send(phone, "1x Ebook @5000");
-
-        await Send(phone, "maybe");
-        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
+        Assert.Equal(FulfillmentType.Dispatch, legacy.Fulfillment);
     }
 
     [Fact]
-    public async Task FreeText_CompleteDigitalOrder_GoesStraightToConfirm()
+    public async Task FreeText_DigitalHint_BecomesDispatchOrder()
     {
+        // The parser may still report a "digital" hint from the vendor's
+        // wording. Digital is disabled, so it must resolve to Dispatch rather
+        // than producing an order the API would reject.
         const string phone = "08010000042";
         _parser.NextIntent = new ChatIntent(ChatIntentKind.CreateOrder, null, null);
-        _parser.NextParsed = new ParsedOrder("Chidi", "2348028613918", "Email delivery",
+        _parser.NextParsed = new ParsedOrder("Chidi", "2348028613918", "Lekki",
             new List<ParsedItem> { new("Ebook", 1, 5000) }, 5000,
             0, "", "chidi@example.com", "digital");
 
-        await Send(phone, "Ebook for Chidi 0808028613918 chidi@example.com email delivery 5000 digital");
+        await Send(phone, "Ebook for Chidi 0808028613918 chidi@example.com Lekki 5000 digital");
+
+        // A "digital" hint is no longer a fulfilment choice; it falls back to a
+        // rider, so the bot must now collect the rider's details.
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task FreeText_SelfDeliveryHint_AsksNothingAboutRiders()
+    {
+        const string phone = "08010000044";
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.CreateOrder, null, null);
+        _parser.NextParsed = new ParsedOrder("Chidi", "2348028613918", "Lekki",
+            new List<ParsedItem> { new("Ebook", 1, 5000) }, 5000,
+            0, "", "chidi@example.com", "self delivery");
+
+        await Send(phone, "Ebook for Chidi 0808028613918 chidi@example.com Lekki 5000, I will deliver myself");
 
         Assert.Equal(ConversationStep.Confirming, State(phone).Step);
-        Assert.Contains("digital", _sender.LastBody);
+        Assert.Contains("self-delivery", _sender.LastBody);
     }
 
     [Fact]
@@ -919,7 +942,7 @@ public class ConversationRouterTests
     {
         var draft = new OrderDraft("Chidi", "0801", "Lekki",
             new List<DraftItem> { new("Sneakers", 2, 22500) }, 45000,
-            BuyerEmail: "chidi@example.com", Fulfillment: FulfillmentType.Dispatch);
+            BuyerEmail: "chidi@example.com", Fulfillment: FulfillmentType.SelfDelivery);
         var loaded = OrderDraft.Load(draft.Save());
         Assert.True(loaded.IsComplete());
         Assert.Equal("Chidi", loaded.CustomerName);
@@ -1048,9 +1071,7 @@ public class ConversationRouterTests
         await WalkToAddressStep(phone);
         await Send(phone, "Lekki");
         await Send(phone, "2x Sneakers @22500");
-        Assert.Equal(ConversationStep.DraftFulfillment, State(phone).Step);
-        await Send(phone, "1");
-        await Send(phone, "0");
+        await Send(phone, "2");
         await Send(phone, "YES");
 
         Assert.Contains("Order created", _sender.LastBody);
