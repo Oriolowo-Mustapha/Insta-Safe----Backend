@@ -1,6 +1,7 @@
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
 using InstaSafe.Application.Features.Admin.Commands.ForceRelease;
+using InstaSafe.Application.Features.Admin.Commands.RetryPayout;
 using InstaSafe.Application.Features.Admin.Commands.SetDispatcherActive;
 using InstaSafe.Application.Features.Admin.DTOs;
 using InstaSafe.Application.Features.Admin.Queries.GetAdminStats;
@@ -186,6 +187,15 @@ public class AdminController : ControllerBase
         if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
         await AuditAsync("order.force-release", "order", id.ToString(), body?.Note, ct);
         return Ok(ApiResponse<OrderDto>.FromResult(result, "Funds force-released to vendor."));
+    }
+
+    [HttpPost("orders/{id:guid}/retry-payout")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> RetryPayout(Guid id, CancellationToken ct)
+    {
+        var result = await _mediator.Send(new RetryPayoutCommand(id), ct);
+        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
+        await AuditAsync("order.retry-payout", "order", id.ToString(), null, ct);
+        return Ok(ApiResponse<OrderDto>.FromResult(result, "Payout re-executed to vendor."));
     }
 
     [HttpGet("chats")]
