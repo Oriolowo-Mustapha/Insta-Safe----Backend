@@ -5,6 +5,7 @@ using InstaSafe.Application.Common.Notifications;
 using InstaSafe.Application.Features.Dispatch.Commands.ConfirmDelivery;
 using InstaSafe.Application.Features.Orders.Commands.ConfirmSatisfaction;
 using InstaSafe.Application.Features.Orders.Commands.DisputeOrder;
+using InstaSafe.Application.Features.Orders.Commands.MarkFundsHeld;
 using InstaSafe.Application.Features.Orders.Commands.ResolveDispute;
 using InstaSafe.Application.Features.Orders.Commands.VerifyOtp;
 using InstaSafe.Application.Mapping;
@@ -91,9 +92,11 @@ public class DeliveryFlowTests : IDisposable
     {
         public bool IsConfigured => true;
         public List<string> Sent { get; } = new();
+        public List<string> Bodies { get; } = new();
         public Task SendAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
         {
             Sent.Add(subject);
+            Bodies.Add(htmlBody);
             return Task.CompletedTask;
         }
     }
@@ -362,6 +365,36 @@ public class DeliveryFlowTests : IDisposable
 
         Assert.True(result.IsSuccess);
         Assert.Equal(OrderStatus.Released, order.Status);
+    }
+
+    [Fact]
+    public async Task MarkHeld_SendsOtpOverWhatsApp_NeverEmail()
+    {
+        // The delivery code releases real money, so it is WhatsApp-only. No
+        // notification path may put it in an email. There is deliberately no
+        // notifier method that accepts an OTP.
+        const string otp = "123456";
+        _otp.NextCode = otp;
+        var order = DispatchHeldOrder();
+        order.Status = OrderStatus.AwaitingPayment;
+        order.BuyerEmail = "buyer@example.com";
+        await _orders.AddAsync(order, CancellationToken.None);
+        await _orders.SaveAsync(CancellationToken.None);
+
+        var handler = new MarkFundsHeldCommandHandler(
+            _orders, _db, _paystack, _otp, _wa, Notifier(), _mapper);
+        var result = await handler.Handle(
+            new MarkFundsHeldCommand("ref-held", null, null), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(OrderStatus.Held, order.Status);
+
+        // It reached the buyer, over WhatsApp.
+        Assert.Contains(_wa.Sent, m => m.Contains(otp));
+
+        // And it reached no email body. Subjects alone would not prove this -
+        // the old FundsHeldAsync put the code in the body only.
+        Assert.DoesNotContain(_email.Bodies, b => b.Contains(otp, StringComparison.Ordinal));
     }
 
     [Fact]

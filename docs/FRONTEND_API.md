@@ -95,6 +95,11 @@ What each state should render:
 | `Delivered` (either) | `releaseDueAt` countdown + Dispute |
 | `Released` / `Refunded` / `Disputed` / `Cancelled` | timeline only |
 
+**The delivery code arrives on WhatsApp only — never by email.** Do not write
+copy like "we emailed you a code"; the buyer has to be looking at WhatsApp. This
+is enforced in the backend: no notification path puts the code in an email, and
+there is deliberately no notifier method that accepts one.
+
 Do not map a `409` onto the panel. `409` means the gate above was wrong, and
 passing the raw API string through leaks the state machine to buyers.
 

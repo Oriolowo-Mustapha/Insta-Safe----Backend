@@ -4,6 +4,19 @@ using Microsoft.Extensions.Logging;
 
 namespace InstaSafe.Application.Common.Notifications;
 
+/// <summary>
+/// All outbound buyer/vendor messaging for an order.
+/// </summary>
+/// <remarks>
+/// <b>The delivery OTP is WhatsApp-only, by construction.</b> No method here
+/// takes or sends an OTP over email: the buyer's code goes out over WhatsApp
+/// from the handler that mints it (MarkFundsHeld) or ConfirmDelivery asks the
+/// buyer for it. Email is reachable from a leaked mailbox or a forwarded
+/// thread, and this code releases real money, so it is not a channel we put it
+/// on. There was once a FundsHeldAsync that emailed the code; it was dead code
+/// and was deleted so nobody can wire it back up. If you are adding a
+/// notification and it needs the code, send WhatsApp.
+/// </remarks>
 public class OrderNotifier
 {
     private readonly IWhatsAppSender _wa;
@@ -107,12 +120,6 @@ public class OrderNotifier
             $"<p>Hi {order.CustomerName},</p><p>Your order <b>{Num(order)}</b> totals <b>{Money(order.AmountKobo)}</b>.</p><p><a href=\"{link}\">Pay securely with InstaSafe</a></p><p>Funds stay in escrow until you confirm delivery.</p>{TrackHtml(order)}{PayRef(order)}");
         await SendVendorEmailAsync(order.VendorId, "New order created",
             $"<p>Order {Num(order)} for <b>{Money(order.AmountKobo)}</b> was created. Share the payment link with your buyer.</p><p>Check your dashboard for full details.</p>");
-    }
-
-    public async Task FundsHeldAsync(Order order, string otpCode, string? buyerEmail)
-    {
-        await TryEmailAsync(buyerEmail, $"Payment received for order {Num(order)} — escrow holding your funds",
-            $"<p>Hi {order.CustomerName},</p><p>We received <b>{Money(order.AmountKobo)}</b> for order <b>{Num(order)}</b>.</p><p>Your delivery code is <b>{otpCode}</b>. Share it with the rider only when you receive your item.</p>{TrackHtml(order)}{PayRef(order)}");
     }
 
     public async Task DriverAssignedAsync(Order order)
