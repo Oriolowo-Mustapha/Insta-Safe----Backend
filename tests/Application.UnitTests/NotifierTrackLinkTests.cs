@@ -74,6 +74,14 @@ public class NotifierTrackLinkTests
         PayVirtualAccountName = "Ada"
     };
 
+    private static Order TestDispatchOrder()
+    {
+        var order = TestOrder();
+        order.DriverPhone = "08055556666";
+        order.DeliveryFeeKobo = 500000;
+        return order;
+    }
+
     private static OrderNotifier Notifier(FakeWa wa, FakeEmail email, Dictionary<string, string> cfg) => new(
         wa, email, new FakeVendors(), NullLogger<OrderNotifier>.Instance, new MapConfig(cfg));
 
@@ -112,5 +120,31 @@ public class NotifierTrackLinkTests
         await notifier.BankTransferDetailsAsync(TestOrder());
 
         Assert.Contains("https://app.test/track/IS-8K4N2Q", wa.Sent[^1]);
+    }
+
+    [Fact]
+    public async Task DriverAssigned_IncludesTrackLink()
+    {
+        var wa = new FakeWa();
+        var notifier = Notifier(wa, new FakeEmail(),
+            new Dictionary<string, string> { ["Frontend:BaseUrl"] = "https://app.test/" });
+
+        await notifier.DriverAssignedAsync(TestDispatchOrder());
+
+        Assert.Contains("https://app.test/track/IS-8K4N2Q", wa.Sent[^1]);
+        Assert.Contains("Lekki", wa.Sent[^1]);
+    }
+
+    [Fact]
+    public async Task DriverAssigned_OmitsTrackLink_WhenUnconfigured()
+    {
+        var wa = new FakeWa();
+        var notifier = Notifier(wa, new FakeEmail(), new Dictionary<string, string>());
+
+        await notifier.DriverAssignedAsync(TestDispatchOrder());
+
+        Assert.DoesNotContain("track", wa.Sent[^1]);
+        Assert.Contains("Lekki", wa.Sent[^1]);
+        Assert.Contains("driver portal", wa.Sent[^1]);
     }
 }

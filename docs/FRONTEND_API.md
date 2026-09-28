@@ -3,6 +3,20 @@
 Base URL (production): `https://instasafe-atfzfsb6c7csbvek.westus3-01.azurewebsites.net`
 Local: `http://localhost:5080` · Interactive reference: `/swagger/index.html`
 
+Frontend origin (production): `https://instasafe-six.vercel.app`
+
+## What changed since the last handoff
+
+Read this section first — it is the delta. Everything else in this document is still accurate.
+
+1. **`/track/{orderNumber}` is now a required frontend route.** The backend puts a live link in the buyer's payment-link WhatsApp, bank-transfer WhatsApp, status emails, **and the dispatcher's assignment WhatsApp**. The dispatcher's copy is the one to action first. See [The `/track/{orderNumber}` page](#the-trackordernumber-page).
+2. **`GET /api/admin/orders`** gained `?q=` (search by order number or Paystack reference).
+3. **`POST /api/admin/orders/{id}/retry-payout`** is new (admin only).
+4. **`GET /api/payments/banks`** now returns the complete Nigerian bank list in one call (no paging, no truncation) — keep calling it once and cache.
+5. `OrderDto` now always includes `orderNumber` (`IS-XXXXXX`).
+
+Nothing in this list is a breaking change to an existing endpoint: no field was removed or renamed.
+
 ## Conventions
 
 ### Envelope
@@ -165,7 +179,30 @@ These power the track page. The OTP/code is the credential; OTPs expire (24h) an
 - `POST /api/orders/{id}/dispute` `{ "reason": "..." }` — freezes funds (`Held`/`Delivered` only)
 - `POST /api/orders/{id}/verify-otp` `{ "otp": "123456" }` — legacy/rider path: releases digital orders and driver-less dispatch orders. Orders **with** an assigned driver must use the driver portal below.
 
-`OrderDto` (amounts in kobo): `id, vendorPhone, customerName, customerPhone, buyerEmail, deliveryAddress, items[{description,quantity,unitPriceKobo}], amountKobo, currency, status, paystackReference, paystackAuthUrl, heldAt, releasedAt, transferReference, refundReference, fulfillment, deliveryFeeKobo, driverPhone, driverTransferReference, deliveredAt, releaseDueAt, disputeReason, payVirtualAccountNumber/Bank`.
+`OrderDto` (amounts in kobo): `id, vendorPhone, customerName, customerPhone, buyerEmail, deliveryAddress, items[{description,quantity,unitPriceKobo}], amountKobo, currency, status, paystackReference, paystackAuthUrl, heldAt, releasedAt, transferReference, refundReference, fulfillment, deliveryFeeKobo, driverPhone, driverTransferReference, deliveredAt, releaseDueAt, disputeReason, payVirtualAccountNumber/Bank, orderNumber`.
+
+### The `/track/{orderNumber}` page
+
+The backend emails/WhatsApps a link shaped exactly like:
+
+```
+https://instasafe-six.vercel.app/track/IS-8K4N2Q
+```
+
+So you must have a route that resolves `/track/[orderNumber]`. **The link is already live in production messages** — buyer payment link, buyer bank-transfer instructions, buyer status emails, and the dispatcher's "delivery assigned" WhatsApp. It renders as a short line (`Track it live here: <url>`) in WhatsApp and a real anchor in email, so nothing else about the messages changes.
+
+Wiring it needs no auth and no new endpoint — both calls are **Public**:
+1. `GET /api/orders/by-reference/{orderNumber}` — header facts (status, amount, vendor, items).
+2. `GET /api/orders/by-reference/{orderNumber}/timeline` — the stepper.
+   `OrderTimelineDto`: `{ orderId, reference, status, amountKobo, events[{ key, label, at }] }`.
+   Event keys in order: `created → payment_pending → funds_held → delivered (carries the inspection deadline) → released | refunded | disputed`.
+
+Behaviour notes:
+- `{orderNumber}` is case-insensitive (`is-8k4n2q` works). The same endpoint still accepts a Paystack reference or an order GUID, so older links keep resolving.
+- Unknown number → `404` with `success: false`. Render "order not found", not an error page.
+- The dispatcher's link is the **public** page, not a driver-only view. It shows the same buyer-facing tracker. If you later want a rider-specific view, keep it behind the driver JWT (`/api/dispatch/*`) — do not put anything extra on the public track page.
+- **Treat the order number as a secret.** These two endpoints are anonymous and the order number is the only credential (6 chars from a 30-char alphabet via CSPRNG, so it is not guessable, but it *is* a bearer token). `OrderDto` includes buyer PII (`customerName`, `customerPhone`, `buyerEmail`, `deliveryAddress`, `payVirtualAccountNumber`). Do not send the number to analytics, error trackers, or third-party scripts, and do not put it in a `Referer` to an external origin.
+
 
 ---
 
@@ -173,8 +210,10 @@ These power the track page. The OTP/code is the credential; OTPs expire (24h) an
 
 - `POST /api/dispatch/request-code` **(Public)** `{ "phone": "..." }` — works for **any** phone (row auto-created). Code via WhatsApp, 10-min expiry.
 - `POST /api/dispatch/verify-code` **(Public)** → `{ token, dispatcher, expiresInHours }`.
-- `GET /api/dispatch/assigned?page=&pageSize=` (driver JWT) — my `Held`/`Delivered` deliveries only.
+- `GET /api/dispatch/assigned?page=&pageSize=` (driver JWT) — my `Held`/`Delivered` deliveries only. `pageSize` is clamped to 1–100.
 - `POST /api/dispatch/orders/{id}/confirm` (driver JWT) `{ "otp": "<buyer code>" }` — marks `Delivered`, starts the 24h window, pays the rider fee instantly. Wrong code → 400; locked/expired → message says so.
+
+**Dispatcher WhatsApp (backend-sent, no frontend work).** On assignment the rider gets the order number, delivery address, fee, a `/track/{orderNumber}` link, and a nudge to the driver portal. If your rider login screen needs to be reachable from that message, point the portal link at your rider route — the backend does not deep-link into it.
 
 ---
 
@@ -182,7 +221,7 @@ These power the track page. The OTP/code is the credential; OTPs expire (24h) an
 
 **Vendor onboarding:** register → verify-email → payout → login → dashboard. Gate on the two flags.
 **Sell:** create order → show buyer `paystackAuthUrl` (card) and/or `request-bank-transfer` details → buyer pays → `Held` (buyer gets OTP) → dispatch confirm → `Delivered` (24h window) → auto-release (worker) or dispute → resolve.
-**Track page (public):** `by-reference` for header facts + `timeline` for the stepper; dispute + confirm-satisfaction buttons call the guest endpoints.
+**Track page (public):** route `/track/{orderNumber}` → `by-reference/{orderNumber}` for header facts + `by-reference/{orderNumber}/timeline` for the stepper; dispute + confirm-satisfaction buttons call the guest endpoints. Also linked from the dispatcher's assignment WhatsApp.
 **Driver app:** request-code → verify-code → assigned list → confirm with buyer OTP.
 
 ## 7. WhatsApp bot (for context, not frontend work)
@@ -207,11 +246,12 @@ Admin__PasswordHash=<output above>
 - `GET /api/admin/vendors?q=&page=` — search phone/name/email; `GET /api/admin/vendors/{id}`
 - `POST /api/admin/vendors/{id}/deactivate|reactivate`, `PUT /api/admin/vendors/{id}/phone`
 - `GET /api/admin/dispatchers`, `POST /api/admin/dispatchers/{id}/deactivate|reactivate`
-- `GET /api/admin/orders?status=&page=`, `GET /api/admin/orders/{id}`
+- `GET /api/admin/orders?status=&q=&page=&pageSize=`, `GET /api/admin/orders/{id}` — `q` searches order number **or** Paystack reference (use it to jump straight to an order a support agent is reading out).
 - `GET /api/admin/disputes` — oldest first
 - `POST /api/admin/orders/{id}/resolve-dispute` `{ "resolution": "release" | "refund" }`
 - `POST /api/admin/orders/{id}/refund`
 - `POST /api/admin/orders/{id}/force-release` `{ "note": "..." }` — pays the vendor remainder from `Held`/`Delivered`/`Disputed`; anything else → `409`
+- `POST /api/admin/orders/{id}/retry-payout` (no body) — re-runs the vendor payout for an order already marked `Released` whose transfer never completed (missing `transferReference`). Returns `409` if the status is not `Released`, if a transfer reference already exists (never pay twice), or if the vendor has no payout recipient. On success the reference is written to the order **and** the escrow ledger. Two failure messages matter: "Paystack rejected the transfer" (nothing was sent — safe to retry once balance/recipient is fixed) vs "outcome is unknown" (check the Paystack transfers list for `InstaSafe payout {orderId}` before retrying, to avoid a double payment). Success responses do **not** re-send buyer/vendor notifications, so a retry will not spam anyone.
 - `GET /api/admin/chats?phone=&from=&to=` — WhatsApp audit transcript
 - `GET /api/admin/webhooks?provider=&event=&validOnly=` — deliveries incl. signature failures
 - `GET /api/admin/outbox` — backlog + recent errors; `GET /api/admin/audit` — every moderation action above, with actor + note

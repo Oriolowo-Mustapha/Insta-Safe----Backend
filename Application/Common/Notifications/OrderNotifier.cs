@@ -119,7 +119,8 @@ public class OrderNotifier
     {
         if (string.IsNullOrWhiteSpace(order.DriverPhone)) return;
         await TryWaAsync(order.DriverPhone,
-            $"InstaSafe delivery assigned 🚚\nOrder {Num(order)}\nDeliver to: {order.DeliveryAddress}\nFee: {Money(order.DeliveryFeeKobo)}\nLog in to the driver portal to confirm on arrival. Check your dashboard for full details.");
+            $"InstaSafe delivery assigned 🚚\nOrder {Num(order)}\nDeliver to: {order.DeliveryAddress}\nFee: {Money(order.DeliveryFeeKobo)}" +
+            $"{TrackLine(order)}\nLog in to the driver portal to confirm on arrival. Check your dashboard for full details.");
     }
 
     public async Task BankTransferDetailsAsync(Order order)
