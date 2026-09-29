@@ -20,6 +20,11 @@ public class GetAdminStatsQueryHandler : IRequestHandler<GetAdminStatsQuery, Res
     {
         var now = DateTimeOffset.UtcNow;
         var dayAgo = now.AddDays(-1);
+        // ReleasedAt is a timestamptz. Comparing it to a bare DateTime
+        // (now.Date) compiles but Npgsql cannot translate the mixed comparison
+        // and the endpoint 500s on Postgres - while the in-memory test provider
+        // accepts it silently. Keep both sides DateTimeOffset.
+        var startOfTodayUtc = new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero);
 
         var ordersByStatus = await _db.Orders.AsNoTracking()
             .GroupBy(o => o.Status)
@@ -31,7 +36,7 @@ public class GetAdminStatsQueryHandler : IRequestHandler<GetAdminStatsQuery, Res
             .SumAsync(o => (long?)o.AmountKobo, ct) ?? 0;
 
         var releasedToday = await _db.Orders.AsNoTracking()
-            .Where(o => o.Status == OrderStatus.Released && o.ReleasedAt >= now.Date)
+            .Where(o => o.Status == OrderStatus.Released && o.ReleasedAt >= startOfTodayUtc)
             .SumAsync(o => (long?)o.AmountKobo, ct) ?? 0;
 
         return Result<AdminStatsDto>.Success(new AdminStatsDto(
