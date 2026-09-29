@@ -906,6 +906,15 @@ public class ConversationRouter
             return;
         }
 
+        // A phone number here means "find this customer's orders" - matched
+        // against the vendor's OWN orders only, so one vendor can never
+        // enumerate another's customers by guessing numbers.
+        if (PhoneNormalizer.LooksLikePhone(text))
+        {
+            await ReplyCustomerPhoneOrdersAsync(state, phone, replyTo, text.Trim(), ct);
+            return;
+        }
+
         ChatIntent intent;
         try
         {
@@ -958,6 +967,46 @@ public class ConversationRouter
         order ??= await _orders.GetByOrderNumberAsync(refTrimmed.ToUpperInvariant(), ct);
         order ??= await _orders.GetByPaystackRefAsync(refTrimmed, ct);
         return order;
+    }
+
+    /// <summary>
+    /// Track by customer phone: "07031602720" and "2347031602720" find the
+    /// same orders, because both sides go through PhoneNormalizer. One match
+    /// shows full details immediately; several show a compact list with codes
+    /// to paste. Scoped to the vendor's own orders - never global.
+    /// </summary>
+    private async Task ReplyCustomerPhoneOrdersAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string rawPhone, CancellationToken ct)
+    {
+        var want = PhoneNormalizer.Normalize(rawPhone);
+        var mine = await _orders.ListByVendorAsync(Guid.Empty, phone, 1, 100, ct);
+        var matches = mine
+            .Where(o => PhoneNormalizer.Normalize(o.CustomerPhone) == want)
+            .OrderByDescending(o => o.CreatedAt)
+            .ToList();
+
+        if (matches.Count == 0)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                $"No orders found for {rawPhone.Trim()}. Check the number, paste an order reference, or type MENU.",
+                state.Step, ct);
+            return;
+        }
+        if (matches.Count == 1)
+        {
+            await SendTrackFoundAsync(state, phone, replyTo, matches[0], ct);
+            return;
+        }
+        var lines = matches.Select((o, i) =>
+        {
+            var num = !string.IsNullOrWhiteSpace(o.OrderNumber) ? o.OrderNumber
+                : o.PaystackReference ?? o.Id.ToString();
+            return $"{i + 1}. {o.CustomerName} — {num} — {o.Status} — ₦{o.AmountKobo / 100:N0}";
+        });
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            $"{matches.Count} orders for {rawPhone.Trim()}:\n" + string.Join("\n", lines) +
+            "\nPaste a reference for full details, or type MENU.",
+            state.Step, ct);
     }
 
     private async Task SendTrackFoundAsync(

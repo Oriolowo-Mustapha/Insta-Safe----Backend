@@ -727,6 +727,101 @@ public class ConversationRouterTests
     }
 
     [Fact]
+    public async Task TrackStep_CustomerPhone070_FindsOrder()
+    {
+        // 070... and 234... are the same number after normalization, both when
+        // typed and when stored.
+        const string phone = "08010000066";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-666666", VendorPhone = norm, CustomerName = "Chidi",
+            CustomerPhone = "2347031602720", DeliveryAddress = "Lekki",
+            AmountKobo = 4500000, Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "07031602720");
+
+        Assert.Contains("IS-666666", _sender.LastBody);
+        Assert.Contains("Held", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task TrackStep_CustomerPhone234_FindsSameOrder()
+    {
+        const string phone = "08010000067";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-777777", VendorPhone = norm, CustomerName = "Chidi",
+            CustomerPhone = "07031602720", DeliveryAddress = "Lekki",
+            AmountKobo = 4500000, Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "2347031602720");
+
+        Assert.Contains("IS-777777", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task TrackStep_CustomerPhone_OtherVendorsOrder_StaysHidden()
+    {
+        // Phone lookup is scoped to the vendor's own orders: guessing a number
+        // must never surface another vendor's customer.
+        const string phone = "08010000068";
+        SeedVendor(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-888888", VendorPhone = "2348099999999", CustomerName = "Stranger",
+            CustomerPhone = "07031602720", DeliveryAddress = "Z", AmountKobo = 300000,
+            Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "07031602720");
+
+        Assert.Contains("No orders found", _sender.LastBody);
+        Assert.DoesNotContain("IS-888888", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task TrackStep_CustomerPhone_MultipleMatches_ListsThem()
+    {
+        const string phone = "08010000069";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-AAAAAA", VendorPhone = norm, CustomerName = "Chidi",
+            CustomerPhone = "07031602720", DeliveryAddress = "Lekki",
+            AmountKobo = 100000, Status = OrderStatus.Held
+        });
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-BBBBBB", VendorPhone = norm, CustomerName = "Chidi",
+            CustomerPhone = "07031602720", DeliveryAddress = "Ikoyi",
+            AmountKobo = 200000, Status = OrderStatus.Released
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "07031602720");
+
+        Assert.Contains("2 orders", _sender.LastBody);
+        Assert.Contains("IS-AAAAAA", _sender.LastBody);
+        Assert.Contains("IS-BBBBBB", _sender.LastBody);
+    }
+
+    [Fact]
     public async Task Menu_ListOrdersIntent_Lists()
     {
         const string phone = "08010000062";
