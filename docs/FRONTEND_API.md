@@ -107,7 +107,7 @@ passing the raw API string through leaks the state machine to buyers.
 1. **`/track/{orderNumber}` is a required frontend route.** The backend puts a live link in the buyer's payment-link WhatsApp, bank-transfer WhatsApp, status emails, **and the dispatcher's assignment WhatsApp**. The dispatcher link is sent on **payment confirmation**, matching the `Held`/`Delivered` filter on `GET /api/dispatch/assigned`.
 2. `GET /api/admin/orders` accepts `?q=` (order number or Paystack reference).
 3. `POST /api/admin/orders/{id}/retry-payout` is new (admin only).
-4. `GET /api/payments/banks` returns the complete Nigerian bank list in one call — call once and cache.
+4. `GET /api/payments/banks` returns the complete Nigerian bank list in one call (~280 banks, one Paystack request, no paging) — call once and cache. Add `?transferOnly=true` for the 2-bank DVA-receivable subset (Titan + Wema) used by `preferredBank`.
 5. `OrderDto` always includes `orderNumber` (`IS-XXXXXX`).
 
 No route, HTTP method, envelope, status code, or field name changed. The breaking
