@@ -107,7 +107,7 @@ passing the raw API string through leaks the state machine to buyers.
 1. **`/track/{orderNumber}` is a required frontend route.** The backend puts a live link in the buyer's payment-link WhatsApp, bank-transfer WhatsApp, status emails, **and the dispatcher's assignment WhatsApp**. The dispatcher link is sent on **payment confirmation**, matching the `Held`/`Delivered` filter on `GET /api/dispatch/assigned`.
 2. `GET /api/admin/orders` accepts `?q=` (order number or Paystack reference).
 3. `POST /api/admin/orders/{id}/retry-payout` is new (admin only).
-4. `GET /api/payments/banks` returns the complete Nigerian bank list in one call (~280 banks, one Paystack request, no paging) — call once and cache. Add `?transferOnly=true` for the 2-bank DVA-receivable subset (Titan + Wema) used by `preferredBank`.
+4. `GET /api/payments/banks` returns the complete Nigerian bank list in one call (~280 banks, one Paystack request, no paging) — call once and cache.
 5. `OrderDto` always includes `orderNumber` (`IS-XXXXXX`).
 
 No route, HTTP method, envelope, status code, or field name changed. The breaking
@@ -313,11 +313,10 @@ All vendor JWT, own id only (else `403`):
 - `buyerEmail` must be real — receipts + status mails go there. `customerPhone` must be a WhatsApp number — the payment link goes there by chat + mail.
 - Returns `orderNumber` (`IS-XXXXXX`, show it everywhere), `paystackAuthUrl` (card/link payment) + `paystackReference`.
 
-### Bank-transfer rail (dedicated virtual account)
-- `POST /api/orders/{id}/request-bank-transfer` (vendor JWT, own order) `{ "preferredBank": "wema-bank" }` (optional; omit for default). Idempotent — repeat calls return the same account. Only from `AwaitingPayment`/`Draft`.
-- Returns `payVirtualAccountNumber/Bank/Name`. Buyer transfers the **exact** total; confirmation is automatic via webhook.
-- `GET /api/payments/banks` **(Public)** → full Nigerian bank list `[{ name, slug, code }]` for dropdowns and valid `preferredBank` slugs. Add `?transferOnly=true` for the short DVA-receivable subset.
-- `GET /api/payments/banks/resolve?accountNumber=...&bankCode=...` **(Public)** → `{ accountNumber, bankCode, accountName }`. Wrong details → `400` with Paystack's reason included. Service down/rate-limited → **`503`** — show "couldn't verify, proceed carefully" instead of "wrong account". (Note: Paystack test mode allows ~3 live resolves/day; use code `001` or live keys for volume testing.)
+### Paying by checkout (the only buyer rail)
+- The buyer always pays through `paystackAuthUrl` (card, transfer, USSD — whatever Paystack checkout offers). There is no separate bank-transfer rail: `POST /api/orders/{id}/request-bank-transfer` and `?transferOnly=true` exist in the API but are **not part of this product** — do not build them.
+- `GET /api/payments/banks` **(Public)** → full Nigerian bank list `[{ name, slug, code }]` for the payout and rider-bank dropdowns.
+- `GET /api/payments/banks/resolve?accountNumber=...&bankCode=...` **(Public)** → `{ accountNumber, bankCode, accountName }`. Wrong details → `400` with Paystack's reason included. Service down/rate-limited → **`503`** — show "couldn't verify, proceed carefully" instead of "wrong account".
 
 ### Vendor order views (JWT, own orders only)
 - `GET /api/orders?page=&pageSize=` — my orders, newest first
@@ -386,7 +385,7 @@ Both dispatch endpoints return **`DispatchOrderDto`**, not `OrderDto` — see [O
 ## 6. End-to-end flows for the UI
 
 **Vendor onboarding:** register → verify-email → payout → login → dashboard. Gate on the two flags.
-**Sell:** create order, picking `fulfillment` → show buyer `paystackAuthUrl` (card) and/or `request-bank-transfer` details → buyer pays → `Held` (buyer gets OTP) → **rider confirms** → `Delivered` (24h window) → auto-release or dispute → resolve. A self-delivery order instead goes `Held` → the buyer releases it from the track page with their own code.
+**Sell:** create order, picking `fulfillment` → show buyer `paystackAuthUrl` → buyer pays → `Held` (buyer gets OTP) → **rider confirms** → `Delivered` (24h window) → auto-release or dispute → resolve. A self-delivery order instead goes `Held` → the buyer releases it from the track page with their own code.
 **Track page (public):** route `/track/{orderNumber}` → `by-reference/{orderNumber}` for header facts + `by-reference/{orderNumber}/timeline` for the stepper. **Dispute** always; the verify panel only for `Held` self-delivery orders. No satisfaction button. Also linked from the dispatcher's assignment WhatsApp.
 **Driver app:** request-code → verify-code → assigned list → confirm with buyer OTP.
 
