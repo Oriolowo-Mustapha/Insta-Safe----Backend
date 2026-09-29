@@ -94,4 +94,182 @@ public class PaystackClient : IPaystackClient
             return (false, null, "Paystack refund response unreadable.");
         }
     }
+
+    public async Task<(bool Success, string? CustomerCode, string? Error)> CreateCustomerAsync(
+        string email, string firstName, string lastName, string phone, Guid orderId, CancellationToken ct)
+    {
+        var body = new
+        {
+            email,
+            first_name = firstName,
+            last_name = lastName,
+            phone,
+            metadata = new { order_id = orderId }
+        };
+        var res = await _http.PostAsJsonAsync("/customer", body, ct);
+        var raw = await res.Content.ReadAsStringAsync(ct);
+        if (!res.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Customer creation failed: {Status} {Body}", res.StatusCode, raw);
+            return (false, null, $"Paystack customer rejected ({(int)res.StatusCode}).");
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var code = doc.RootElement.GetProperty("data").GetProperty("customer_code").GetString();
+            return (true, code, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Customer response unparseable");
+            return (false, null, "Paystack customer response unreadable.");
+        }
+    }
+
+    public async Task<(bool Success, string? AccountNumber, string? AccountName, string? Bank, string? Error)> AssignDedicatedAccountAsync(
+        string customerCode, string? preferredBank, CancellationToken ct)
+    {
+        object body = string.IsNullOrWhiteSpace(preferredBank)
+            ? new { customer = customerCode }
+            : new { customer = customerCode, preferred_bank = preferredBank };
+        var res = await _http.PostAsJsonAsync("/dedicated_account", body, ct);
+        var raw = await res.Content.ReadAsStringAsync(ct);
+        if (!res.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("DVA assign failed for {Customer}: {Status} {Body}", customerCode, res.StatusCode, raw);
+            return (false, null, null, null, $"Virtual account rejected ({(int)res.StatusCode}).");
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var data = doc.RootElement.GetProperty("data");
+            var bank = data.TryGetProperty("bank", out var b) ? b.GetProperty("name").GetString() : null;
+            return (true,
+                data.TryGetProperty("account_number", out var a) ? a.GetString() : null,
+                data.TryGetProperty("account_name", out var n) ? n.GetString() : null,
+                bank, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "DVA response unparseable for {Customer}", customerCode);
+            return (false, null, null, null, "Virtual account response unreadable.");
+        }
+    }
+
+    public async Task<List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
+    {
+        var res = await _http.GetAsync("/bank?country=nigeria&pay_with_bank_transfer=true&perPage=100", ct);
+        if (!res.IsSuccessStatusCode) return new();
+        try
+        {
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+            return doc.RootElement.GetProperty("data").EnumerateArray()
+                .Select(b => (
+                    Name: b.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                    Slug: b.TryGetProperty("slug", out var s) ? s.GetString() ?? "" : "",
+                    Code: b.TryGetProperty("code", out var c) ? c.GetString() ?? "" : ""))
+                .Where(b => !string.IsNullOrEmpty(b.Name))
+                .ToList();
+        }
+        catch
+        {
+            return new();
+        }
+    }
+
+    public async Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
+    {
+        // Full Nigerian bank list (payout dropdowns). /bank ignores `page`;
+        // it is a cursor API (use_cursor=true, then follow meta.next).
+        // Dedupe by code as a guard against repeated pages.
+        var all = new List<(string Name, string Slug, string Code)>();
+        string? cursor = null;
+        for (var i = 0; i < 5; i++)
+        {
+            var url = "/bank?country=nigeria&perPage=100&use_cursor=true"
+                + (cursor is null ? "" : $"&next={Uri.EscapeDataString(cursor)}");
+            var res = await _http.GetAsync(url, ct);
+            if (!res.IsSuccessStatusCode) break;
+            try
+            {
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+                var root = doc.RootElement;
+                var batch = root.GetProperty("data").EnumerateArray()
+                    .Select(b => (
+                        Name: b.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                        Slug: b.TryGetProperty("slug", out var s) ? s.GetString() ?? "" : "",
+                        Code: b.TryGetProperty("code", out var c) ? c.GetString() ?? "" : ""))
+                    .Where(b => !string.IsNullOrEmpty(b.Name) && !string.IsNullOrEmpty(b.Code))
+                    .ToList();
+                foreach (var b in batch)
+                    if (!all.Any(x => x.Code == b.Code)) all.Add(b);
+                cursor = root.TryGetProperty("meta", out var m)
+                    && m.TryGetProperty("next", out var nx)
+                    && nx.ValueKind == JsonValueKind.String
+                    ? nx.GetString() : null;
+                if (string.IsNullOrEmpty(cursor) || batch.Count < 100) break;
+            }
+            catch
+            {
+                break;
+            }
+        }
+        return all;
+    }
+
+    public async Task<AccountResolveResult> ResolveAccountAsync(
+        string accountNumber, string bankCode, CancellationToken ct)
+    {
+        var res = await _http.GetAsync(
+            $"/bank/resolve?account_number={Uri.EscapeDataString(accountNumber)}&bank_code={Uri.EscapeDataString(bankCode)}", ct);
+        var raw = await res.Content.ReadAsStringAsync(ct);
+        if (!res.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Account resolve failed: {Status} {Body}", res.StatusCode, raw);
+            var paystackMsg = PaystackMessage(raw);
+            if (IsServiceDown(res.StatusCode, paystackMsg))
+                return new AccountResolveResult(false, null, ResolveFailureKind.Unavailable,
+                    "Bank verification is temporarily unavailable. Please double-check the account number and bank yourself and continue — we'll retry verification later.");
+            return new AccountResolveResult(false, null, ResolveFailureKind.Invalid,
+                $"Could not verify this account ({paystackMsg}). Check the number and bank, then retry.");
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var name = doc.RootElement.GetProperty("data").GetProperty("account_name").GetString();
+            if (string.IsNullOrWhiteSpace(name))
+                return new AccountResolveResult(false, null, ResolveFailureKind.Invalid,
+                    "No account name returned. Check the number and bank, then retry.");
+            return new AccountResolveResult(true, name, ResolveFailureKind.Invalid, "");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Account resolve response unparseable");
+            return new AccountResolveResult(false, null, ResolveFailureKind.Unavailable,
+                "Bank verification is temporarily unavailable. Please double-check the details yourself and continue.");
+        }
+    }
+
+    private static bool IsServiceDown(System.Net.HttpStatusCode status, string message)
+    {
+        if ((int)status == 429 || (int)status >= 500) return true;
+        var m = message.ToLowerInvariant();
+        return m.Contains("limit") || m.Contains("exceed") || m.Contains("unavailable")
+            || m.Contains("try again later") || m.Contains("timeout") || m.Contains("test bank codes");
+    }
+
+    private static string PaystackMessage(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.TryGetProperty("message", out var m)
+                ? m.GetString() ?? "rejected"
+                : "rejected";
+        }
+        catch
+        {
+            return "rejected";
+        }
+    }
 }

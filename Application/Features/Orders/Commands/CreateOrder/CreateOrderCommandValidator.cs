@@ -13,12 +13,31 @@ public class CreateOrderCommandValidator : AbstractValidator<CreateOrderCommand>
         RuleFor(x => x.AmountNgn).GreaterThan(0);
         RuleFor(x => x.BuyerEmail).NotEmpty().EmailAddress();
         RuleFor(x => x.Items).NotEmpty();
-        RuleFor(x => x.Fulfillment).IsInEnum();
+        RuleFor(x => x.Fulfillment)
+            .Must(f => f is Domain.Enums.FulfillmentType.Dispatch or Domain.Enums.FulfillmentType.SelfDelivery)
+            .WithMessage("Fulfilment must be dispatch (0) or self-delivery (2). Digital fulfilment has been disabled.")
+            .WithErrorCode("fulfillment.unsupported");
         RuleFor(x => x.DeliveryFeeNgn).GreaterThanOrEqualTo(0);
         RuleFor(x => x.DriverPhone).MaximumLength(20);
-        When(x => x.Fulfillment == Domain.Enums.FulfillmentType.Digital, () =>
+
+        // The vendor now states which of the two flows they are in, so each
+        // shape is unambiguous. An ambiguous order (Dispatch with no rider) is
+        // what made the track page unable to decide whether verify-otp would
+        // 200 or 400, so it is no longer accepted.
+        When(x => x.Fulfillment == Domain.Enums.FulfillmentType.Dispatch, () =>
         {
-            RuleFor(x => x.DeliveryFeeNgn).Equal(0).WithMessage("Digital orders cannot have a delivery fee.");
+            RuleFor(x => x.DriverPhone)
+                .NotEmpty()
+                .WithMessage("A dispatch order needs a rider. Send fulfilment 2 (self-delivery) to deliver it yourself.")
+                .WithErrorCode("fulfillment.dispatch_needs_rider");
+        });
+
+        When(x => x.Fulfillment == Domain.Enums.FulfillmentType.SelfDelivery, () =>
+        {
+            RuleFor(x => x.DriverPhone)
+                .Must(string.IsNullOrWhiteSpace)
+                .WithMessage("A self-delivery order must not name a rider. Send fulfilment 0 (dispatch) instead.")
+                .WithErrorCode("fulfillment.selfdelivery_no_rider");
         });
     }
 }

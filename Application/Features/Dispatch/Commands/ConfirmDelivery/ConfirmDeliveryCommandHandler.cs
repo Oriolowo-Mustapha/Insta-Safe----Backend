@@ -13,7 +13,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace InstaSafe.Application.Features.Dispatch.Commands.ConfirmDelivery;
 
-public class ConfirmDeliveryCommandHandler : IRequestHandler<ConfirmDeliveryCommand, Result<OrderDto>>
+public class ConfirmDeliveryCommandHandler : IRequestHandler<ConfirmDeliveryCommand, Result<DispatchOrderDto>>
 {
     public static readonly TimeSpan InspectionWindow = TimeSpan.FromHours(24);
 
@@ -32,20 +32,20 @@ public class ConfirmDeliveryCommandHandler : IRequestHandler<ConfirmDeliveryComm
         _paystack = paystack; _notifier = notifier; _mapper = mapper;
     }
 
-    public async Task<Result<OrderDto>> Handle(ConfirmDeliveryCommand req, CancellationToken ct)
+    public async Task<Result<DispatchOrderDto>> Handle(ConfirmDeliveryCommand req, CancellationToken ct)
     {
         var order = await _orders.GetByIdAsync(req.OrderId, ct);
         if (order is null)
-            return Result<OrderDto>.Failure("Order not found.");
+            return Result<DispatchOrderDto>.Failure("Order not found.");
         if (order.Fulfillment != FulfillmentType.Dispatch)
-            return Result<OrderDto>.Failure("This order needs no dispatch.");
+            return Result<DispatchOrderDto>.Failure("This order needs no dispatch.");
         if (order.Status != OrderStatus.Held)
             throw new ConflictException($"Order is {order.Status}, delivery not expected.");
         if (string.IsNullOrWhiteSpace(order.DriverPhone)
             || PhoneNormalizer.Normalize(order.DriverPhone) != PhoneNormalizer.Normalize(req.DriverPhone))
-            return Result<OrderDto>.Failure("This delivery is not assigned to you.");
+            return Result<DispatchOrderDto>.Failure("This delivery is not assigned to you.");
         if (order.OtpHash is null || !order.OtpHash.Contains('.'))
-            return Result<OrderDto>.Failure("No delivery code pending for this order.");
+            return Result<DispatchOrderDto>.Failure("No delivery code pending for this order.");
         if (order.OtpExpiresAt is null || DateTimeOffset.UtcNow > order.OtpExpiresAt)
             throw new DomainValidationException("Delivery code has expired.");
         if (order.OtpAttempts >= 5)
@@ -90,6 +90,6 @@ public class ConfirmDeliveryCommandHandler : IRequestHandler<ConfirmDeliveryComm
 
         await _notifier.DeliveredAsync(order, order.BuyerEmail);
 
-        return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
+        return Result<DispatchOrderDto>.Success(_mapper.Map<DispatchOrderDto>(order));
     }
 }

@@ -1,7 +1,6 @@
 using InstaSafe.Application.Common.Helpers;
 using InstaSafe.Application.Common.Models;
 using InstaSafe.Application.Features.Dispatch.Commands.ConfirmDelivery;
-using InstaSafe.Application.Features.Dispatch.Commands.RegisterDispatcher;
 using InstaSafe.Application.Features.Dispatch.Commands.RequestDispatcherOtp;
 using InstaSafe.Application.Features.Dispatch.Commands.VerifyDispatcherOtp;
 using InstaSafe.Application.Features.Dispatch.DTOs;
@@ -27,16 +26,6 @@ public class DispatchController : ControllerBase
         _mediator = mediator; _orders = orders; _mapper = mapper;
     }
 
-    [HttpPost("register")]
-    [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<DispatcherDto>>> Register(
-        [FromBody] RegisterDispatcherCommand cmd, CancellationToken ct)
-    {
-        var result = await _mediator.Send(cmd, ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<DispatcherDto>.FromResult(result));
-        return Ok(ApiResponse<DispatcherDto>.FromResult(result, "Dispatcher registered."));
-    }
-
     [HttpPost("request-code")]
     [AllowAnonymous]
     public async Task<ActionResult<ApiResponse<bool>>> RequestCode(
@@ -59,7 +48,7 @@ public class DispatchController : ControllerBase
 
     [HttpGet("assigned")]
     [Authorize]
-    public async Task<ActionResult<ApiResponse<List<OrderDto>>>> Assigned(
+    public async Task<ActionResult<ApiResponse<List<DispatchOrderDto>>>> Assigned(
         [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
     {
         var driverId = User.DispatcherId();
@@ -67,12 +56,12 @@ public class DispatchController : ControllerBase
         if (driverId is null || phone is null) return Forbid();
         var orders = await _orders.ListByDriverAsync(driverId.Value, phone,
             page <= 0 ? 1 : page, Math.Clamp(pageSize, 1, 100), ct);
-        return Ok(ApiResponse<List<OrderDto>>.SuccessResponse(_mapper.Map<List<OrderDto>>(orders)));
+        return Ok(ApiResponse<List<DispatchOrderDto>>.SuccessResponse(_mapper.Map<List<DispatchOrderDto>>(orders)));
     }
 
     [HttpPost("orders/{id:guid}/confirm")]
     [Authorize]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> Confirm(
+    public async Task<ActionResult<ApiResponse<DispatchOrderDto>>> Confirm(
         Guid id, [FromBody] ConfirmRequest body, CancellationToken ct)
     {
         var driverId = User.DispatcherId();
@@ -80,8 +69,8 @@ public class DispatchController : ControllerBase
         if (driverId is null || phone is null) return Forbid();
         var result = await _mediator.Send(
             new ConfirmDeliveryCommand(driverId.Value, phone, id, body.Otp), ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Delivery confirmed. Rider fee on its way."));
+        if (!result.IsSuccess) return BadRequest(ApiResponse<DispatchOrderDto>.FromResult(result));
+        return Ok(ApiResponse<DispatchOrderDto>.FromResult(result, "Delivery confirmed. Rider fee on its way."));
     }
 
     public sealed record DispatchRequestCodeRequest(string Phone);

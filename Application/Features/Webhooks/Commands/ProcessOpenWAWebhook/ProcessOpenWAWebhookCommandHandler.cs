@@ -21,16 +21,17 @@ public class ProcessOpenWAWebhookCommandHandler : IRequestHandler<ProcessOpenWAW
     private readonly IConfiguration _config;
     private readonly ILogger<ProcessOpenWAWebhookCommandHandler> _logger;
     private readonly ConversationRouter _router;
+    private readonly IContactResolver _contacts;
 
     public ProcessOpenWAWebhookCommandHandler(
         IAppDbContext db, IMediator mediator, IGroqParser parser,
         IWhatsAppSender sender, IConfiguration config,
         ILogger<ProcessOpenWAWebhookCommandHandler> logger,
-        ConversationRouter router)
+        ConversationRouter router, IContactResolver contacts)
     {
         _db = db; _mediator = mediator; _parser = parser;
         _sender = sender; _config = config; _logger = logger;
-        _router = router;
+        _router = router; _contacts = contacts;
     }
 
     public async Task<Result<bool>> Handle(ProcessOpenWAWebhookCommand req, CancellationToken ct)
@@ -104,7 +105,27 @@ public class ProcessOpenWAWebhookCommandHandler : IRequestHandler<ProcessOpenWAW
         var body = data.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "";
         if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(body)) return false;
 
+        // Sender identity: @c.us carries the phone; @lid is a privacy id that
+        // must be resolved to a phone for vendor matching. Replies ALWAYS go
+        // back to the original JID (a reconstructed @c.us is unroutable).
         var vendorPhone = from.Contains('@') ? from[..from.IndexOf('@')] : from;
+        if (from.EndsWith("@lid", StringComparison.OrdinalIgnoreCase))
+        {
+            var resolved = await _contacts.ResolvePhoneAsync(from, ct);
+            if (!string.IsNullOrWhiteSpace(resolved))
+                vendorPhone = resolved;
+            else
+                _logger.LogWarning("Unresolvable LID sender {From}; falling back to raw digits", from);
+        }
+
+        // Admin audit trail: persisted immediately so it survives downstream failures.
+        _db.ChatMessages.Add(new ChatMessage
+        {
+            Phone = vendorPhone,
+            Direction = ChatDirection.Inbound,
+            Body = body.Length > 1000 ? body[..1000] : body
+        });
+        await _db.SaveChangesAsync(ct);
 
         return await _router.RouteAsync(vendorPhone, body, from, ct);
     }

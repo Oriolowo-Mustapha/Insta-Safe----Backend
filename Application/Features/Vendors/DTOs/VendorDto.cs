@@ -12,4 +12,6 @@ public sealed record VendorDto(
     DateTimeOffset? UpdatedAt,
     string? FirstName = null,
     string? LastName = null,
-    string? Email = null);
+    string? Email = null,
+    bool EmailVerified = false,
+    bool OnboardingCompleted = false);

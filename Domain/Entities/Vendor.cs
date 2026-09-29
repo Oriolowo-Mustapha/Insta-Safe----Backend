@@ -14,4 +14,10 @@ public class Vendor : Common.BaseEntity
     public string? OtpHash { get; set; }
     public DateTimeOffset? OtpExpiresAt { get; set; }
     public int OtpAttempts { get; set; }
+    public string? PasswordHash { get; set; }
+    public bool EmailVerified { get; set; }
+    public string? EmailOtpHash { get; set; }
+    public DateTimeOffset? EmailOtpExpiresAt { get; set; }
+    public int EmailOtpAttempts { get; set; }
+    public bool OnboardingCompleted { get; set; }
 }

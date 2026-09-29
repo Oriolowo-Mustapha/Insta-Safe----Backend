@@ -3,6 +3,7 @@ using InstaSafe.Application.Common.Helpers;
 using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Features.Orders.Commands.CreateOrder;
 using MediatR;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace InstaSafe.Application.Features.Webhooks;
@@ -10,6 +11,7 @@ namespace InstaSafe.Application.Features.Webhooks;
 public class ConversationRouter
 {
     public static readonly TimeSpan StateExpiry = TimeSpan.FromMinutes(30);
+    public static readonly TimeSpan DraftRetention = TimeSpan.FromDays(7);
 
     private readonly IConversationRepository _states;
     private readonly IVendorRepository _vendors;
@@ -18,16 +20,20 @@ public class ConversationRouter
     private readonly IWhatsAppSender _sender;
     private readonly IMediator _mediator;
     private readonly ISanitizer _sanitizer;
+    private readonly BankDirectory _banks;
+    private readonly IPaystackClient _paystack;
     private readonly ILogger<ConversationRouter> _logger;
 
     public ConversationRouter(
         IConversationRepository states, IVendorRepository vendors, IOrderRepository orders,
         IGroqParser parser, IWhatsAppSender sender, IMediator mediator,
-        ISanitizer sanitizer, ILogger<ConversationRouter> logger)
+        ISanitizer sanitizer, BankDirectory banks,
+        IPaystackClient paystack, ILogger<ConversationRouter> logger)
     {
         _states = states; _vendors = vendors; _orders = orders;
         _parser = parser; _sender = sender; _mediator = mediator;
-        _sanitizer = sanitizer; _logger = logger;
+        _sanitizer = sanitizer; _banks = banks;
+        _paystack = paystack; _logger = logger;
     }
 
     public async Task<bool> RouteAsync(string rawPhone, string body, string? replyJid, CancellationToken ct)
@@ -36,6 +42,13 @@ public class ConversationRouter
         var replyTo = string.IsNullOrWhiteSpace(replyJid) ? phone : replyJid.Trim();
         var text = (body ?? "").Trim();
         if (string.IsNullOrEmpty(text)) return false;
+
+        // Bot access gate: verified + onboarded vendors only.
+        // Everyone else (buyers replying, strangers, deactivated) gets
+        // SILENCE: inbound is audit-logged upstream, OpenWA gets its 2xx,
+        // and no state is created. Buyers are served via notifications only.
+        if (!await IsBotUserAsync(phone, ct))
+            return true;
 
         var state = await _states.GetByPhoneAsync(phone, ct);
         if (state is null)
@@ -47,28 +60,31 @@ public class ConversationRouter
             && state.UpdatedAt.HasValue
             && DateTimeOffset.UtcNow - state.UpdatedAt.Value > StateExpiry)
         {
-            Reset(state);
+            await PersistAndResetAsync(state, ct);
             await ReplyAndSaveAsync(state, phone, replyTo,
-                ConversationTexts.SessionExpired + "\n\n" + ConversationTexts.Menu,
+                ConversationTexts.SessionExpired + "\n" + ConversationTexts.ProgressSaved +
+                "\n\n" + await GetMenuAsync(phone, ct),
                 Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
             return true;
         }
-
-        await EnsureVendorAsync(phone, ct);
-
         var upper = text.ToUpperInvariant();
-        if (upper is "MENU" or "0")
+        if (upper is "MENU")
         {
-            Reset(state);
-            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Menu,
+            await PersistAndResetAsync(state, ct);
+            await ReplyAndSaveAsync(state, phone, replyTo, await GetMenuAsync(phone, ct),
                 Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
             return true;
         }
         if (upper is "CANCEL" or "STOP")
         {
-            Reset(state);
+            await PersistAndResetAsync(state, ct);
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Cancelled,
                 Domain.Entities.ConversationStep.Idle, ct);
+            return true;
+        }
+        if (upper is "BACK" or "EDIT")
+        {
+            await HandleBackStepAsync(state, phone, replyTo, ct);
             return true;
         }
 
@@ -77,32 +93,37 @@ public class ConversationRouter
         switch (state.Step)
         {
             case Domain.Entities.ConversationStep.Idle:
-            case Domain.Entities.ConversationStep.AwaitingMenuChoice:
-                await HandleMenuOrIntentAsync(state, phone, replyTo, text, draft, ct);
+            case Domain.Entities.ConversationStep.AwaitingMenuChoice:                await HandleMenuOrIntentAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.BrowsingDrafts:
+                await HandleBrowseStepAsync(state, phone, replyTo, text, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftCustomerName:
                 if (text.Length > 120) { await ReplyAndSaveAsync(state, phone, replyTo, "That name is too long — please send a shorter name.", state.Step, ct); break; }
                 draft = draft with { CustomerName = _sanitizer.Clean(text, 120) };
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskCustomerPhone,
-                    Domain.Entities.ConversationStep.DraftCustomerPhone, ct, draft);
+                await AdvanceAsync(state, phone, replyTo, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftCustomerPhone:
                 var custPhone = PhoneNormalizer.Normalize(text);
-                if (custPhone.Length < 7)
+                if (!PhoneNormalizer.LooksLikePhone(text))
                 {
+                    if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                        "the customer's phone number", ct))
+                        break;
                     await ReplyAndSaveAsync(state, phone, replyTo,
                         "That doesn't look like a phone number. Please send the customer's phone number (e.g. 08012345678).",
                         state.Step, ct);
                     break;
                 }
                 draft = draft with { CustomerPhone = _sanitizer.Clean(custPhone, 20) };
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskAddress,
-                    Domain.Entities.ConversationStep.DraftAddress, ct, draft);
+                await AdvanceAsync(state, phone, replyTo, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftBuyerEmail:
+                await HandleBuyerEmailStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftAddress:
                 draft = draft with { Address = _sanitizer.Clean(text, 500) };
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskItems,
-                    Domain.Entities.ConversationStep.DraftItems, ct, draft);
+                await AdvanceAsync(state, phone, replyTo, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.DraftItems:
                 await HandleItemsStepAsync(state, phone, replyTo, text, draft, ct);
@@ -110,11 +131,32 @@ public class ConversationRouter
             case Domain.Entities.ConversationStep.DraftAmount:
                 await HandleAmountStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
+            case Domain.Entities.ConversationStep.DraftFulfillment:
+                await HandleFulfillmentStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDeliveryFee:
+                await HandleFeeStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDriverPhone:
+                await HandleDriverPhoneStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDriverAccount:
+                await HandleDriverAccountStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDriverBankName:
+                await HandleDriverBankNameStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
+            case Domain.Entities.ConversationStep.DraftDriverConfirm:
+                await HandleDriverConfirmStepAsync(state, phone, replyTo, text, draft, ct);
+                break;
             case Domain.Entities.ConversationStep.Confirming:
                 await HandleConfirmStepAsync(state, phone, replyTo, text, draft, ct);
                 break;
             case Domain.Entities.ConversationStep.AwaitingTrackRef:
-                await LookupAndReplyTrackAsync(state, phone, replyTo, text, ct);
+                await HandleTrackStepAsync(state, phone, replyTo, text, ct);
+                break;
+            case Domain.Entities.ConversationStep.AwaitingOrderPick:
+                await HandleOrderPickStepAsync(state, phone, replyTo, text, ct);
                 break;
         }
 
@@ -142,6 +184,11 @@ public class ConversationRouter
                 Domain.Entities.ConversationStep.Idle, ct);
             return;
         }
+        if (text is "4")
+        {
+            await ShowDraftListAsync(state, phone, replyTo, ct);
+            return;
+        }
 
         ChatIntent intent;
         try
@@ -154,11 +201,23 @@ public class ConversationRouter
             intent = new ChatIntent(ChatIntentKind.Unknown, null, null);
         }
 
+        await HandleIntentAsync(state, phone, replyTo, intent, text, ct);
+    }
+
+    /// <summary>
+    /// Shared intent executor used from menu states and from the track-step
+    /// pre-check. List/chitchat replies preserve the current step so an
+    /// interrupted flow (e.g. tracking) continues where it stopped.
+    /// </summary>
+    private async Task HandleIntentAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo,
+        ChatIntent intent, string text, CancellationToken ct)
+    {
         switch (intent.Kind)
         {
             case ChatIntentKind.Greeting:
                 await ReplyAndSaveAsync(state, phone, replyTo,
-                    ConversationTexts.Welcome + "\n\n" + ConversationTexts.Menu,
+                    ConversationTexts.Welcome + "\n\n" + await GetMenuAsync(phone, ct),
                     Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
                 break;
             case ChatIntentKind.MenuSelect:
@@ -174,21 +233,129 @@ public class ConversationRouter
                     await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskTrackRef,
                         Domain.Entities.ConversationStep.AwaitingTrackRef, ct);
                 break;
+            case ChatIntentKind.ListOrders:
+                await ReplyOwnOrdersAsync(state, phone, replyTo, ct);
+                break;
+            case ChatIntentKind.Chitchat:
+                await ReplyChitchatAsync(state, phone, replyTo, text, ct);
+                break;
             case ChatIntentKind.Help:
                 await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Help,
                     Domain.Entities.ConversationStep.Idle, ct);
                 break;
             case ChatIntentKind.Cancel:
-                Reset(state);
+                await PersistAndResetAsync(state, ct);
                 await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Cancelled,
                     Domain.Entities.ConversationStep.Idle, ct);
                 break;
             default:
                 await ReplyAndSaveAsync(state, phone, replyTo,
-                    "I didn't quite get that. " + ConversationTexts.Menu,
+                    "I didn't quite get that. " + await GetMenuAsync(phone, ct),
                     Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
                 break;
         }
+    }
+
+    private async Task ReplyOwnOrdersAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, CancellationToken ct)
+    {
+        var orders = await _orders.ListByVendorAsync(Guid.Empty, phone, 1, 5, ct);
+        if (orders.Count == 0)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "You have no orders yet. Reply 1 to create your first escrow link.",
+                state.Step, ct);
+            return;
+        }
+        var lines = orders.Select((o, i) =>
+        {
+            var num = !string.IsNullOrWhiteSpace(o.OrderNumber) ? o.OrderNumber
+                : o.PaystackReference ?? o.Id.ToString();
+            var who = string.IsNullOrWhiteSpace(o.CustomerName) ? "Unnamed" : o.CustomerName;
+            return $"{i + 1}. {who} — {num} — {o.Status} — ₦{o.AmountKobo / 100:N0}";
+        });
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            "Your recent orders:\n" + string.Join("\n", lines) +
+            "\nReply with the number for full details, or paste a reference.",
+            Domain.Entities.ConversationStep.AwaitingOrderPick, ct);
+    }
+
+    private async Task ReplyChitchatAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
+    {
+        string reply;
+        try
+        {
+            reply = await _parser.ChatReplyAsync(text, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Chitchat reply failed");
+            reply = "";
+        }
+        if (string.IsNullOrWhiteSpace(reply))
+            reply = "Noted 👍 Type MENU to see what I can do for you.";
+        await ReplyAndSaveAsync(state, phone, replyTo, reply, state.Step, ct);
+    }
+
+    private async Task ShowDraftListAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, CancellationToken ct)
+    {
+        var drafts = await GetOpenDraftsAsync(phone, ct);
+        if (drafts.Count == 0)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.NoDrafts,
+                Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
+            return;
+        }
+        var summaries = drafts
+            .Select(d => OrderDraft.Load(d.DraftJson).OneLineSummary())
+            .ToList();
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.DraftList(summaries),
+            Domain.Entities.ConversationStep.BrowsingDrafts, ct);
+    }
+
+    private async Task HandleBrowseStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
+    {
+        var upper = text.ToUpperInvariant();
+        if (upper.StartsWith("D") && int.TryParse(upper[1..], out var discard) && discard >= 1)
+        {
+            var drafts = await GetOpenDraftsAsync(phone, ct);
+            if (discard <= drafts.Count)
+            {
+                var tracked = await _states.GetDraftAsync(drafts[discard - 1].Id, ct);
+                if (tracked is not null)
+                {
+                    tracked.Status = Domain.Entities.DraftTicketStatus.Discarded;
+                    await _states.SaveAsync(ct);
+                }
+                await ShowDraftListAsync(state, phone, replyTo, ct);
+                return;
+            }
+        }
+
+        if (int.TryParse(text.Trim(), out var pick) && pick >= 1)
+        {
+            var drafts = await GetOpenDraftsAsync(phone, ct);
+            if (pick <= drafts.Count)
+            {
+                var chosen = drafts[pick - 1];
+                var draft = OrderDraft.Load(chosen.DraftJson);
+                state.CurrentDraftId = chosen.Id;
+                var next = draft.IsComplete()
+                    ? Domain.Entities.ConversationStep.Confirming
+                    : FirstMissingStep(draft);
+                var intro = ConversationTexts.DraftLoaded + "\n\n" +
+                    (next == Domain.Entities.ConversationStep.Confirming
+                        ? ConfirmText(draft)
+                        : PromptFor(next));
+                await ReplyAndSaveAsync(state, phone, replyTo, intro, next, ct, draft);
+                return;
+            }
+        }
+
+        await ShowDraftListAsync(state, phone, replyTo, ct);
     }
 
     private async Task HandleMenuOptionAsync(
@@ -208,8 +375,11 @@ public class ConversationRouter
                 await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Help,
                     Domain.Entities.ConversationStep.Idle, ct);
                 break;
+            case 4:
+                await ShowDraftListAsync(state, phone, replyTo, ct);
+                break;
             default:
-                await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.Menu,
+                await ReplyAndSaveAsync(state, phone, replyTo, await GetMenuAsync(phone, ct),
                     Domain.Entities.ConversationStep.AwaitingMenuChoice, ct);
                 break;
         }
@@ -239,7 +409,13 @@ public class ConversationRouter
                 _sanitizer.Clean(i.Description, 300),
                 i.Quantity <= 0 ? 1 : i.Quantity,
                 i.UnitPriceNgn)).ToList(),
-            parsed.TotalNgn);
+            parsed.TotalNgn,
+            parsed.DeliveryFeeNgn < 0 ? 0 : parsed.DeliveryFeeNgn,
+            _sanitizer.Clean(PhoneNormalizer.Normalize(parsed.DriverPhone), 20),
+            BuyerEmail: InstaSafe.Application.Common.Helpers.EmailChecker.IsPlausible(parsed.BuyerEmail)
+                ? _sanitizer.Clean(parsed.BuyerEmail.Trim().ToLowerInvariant(), 200)
+                : "",
+            Fulfillment: ParseFulfillmentHint(parsed.FulfillmentHint));
 
         if (draft.IsComplete())
         {
@@ -252,6 +428,18 @@ public class ConversationRouter
         await ReplyAndSaveAsync(state, phone, replyTo,
             ConversationTexts.MissingDetails(draft.MissingFields()) + "\n\n" + PromptFor(next),
             next, ct, draft);
+    }
+
+    /// <summary>
+    /// Digital is disabled, so a hint only distinguishes rider from self-deliver.
+    /// Anything unrecognised (including "digital") means a rider.
+    /// </summary>
+    private static Domain.Enums.FulfillmentType ParseFulfillmentHint(string? hint)
+    {
+        var h = (hint ?? "").Trim().ToLowerInvariant();
+        if (h.StartsWith("self") || h.StartsWith("pickup") || h.StartsWith("own"))
+            return Domain.Enums.FulfillmentType.SelfDelivery;
+        return Domain.Enums.FulfillmentType.Dispatch;
     }
 
     private async Task HandleItemsStepAsync(
@@ -269,6 +457,9 @@ public class ConversationRouter
 
         if (parsed.Items.Count == 0)
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the order items", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "I couldn't pick out any items. Try e.g:\n2x Sneakers @22500",
                 state.Step, ct);
@@ -285,8 +476,8 @@ public class ConversationRouter
         if (parsed.TotalNgn > 0) draft = draft with { TotalNgn = parsed.TotalNgn };
 
         if (draft.TotalNgn > 0)
-            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
-                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskFulfillment,
+                Domain.Entities.ConversationStep.DraftFulfillment, ct, draft);
         else
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskAmount,
                 Domain.Entities.ConversationStep.DraftAmount, ct, draft);
@@ -299,15 +490,253 @@ public class ConversationRouter
         if (long.TryParse(digits, out var amount) && amount > 0)
         {
             draft = draft with { TotalNgn = amount };
-            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
-                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskFulfillment,
+                Domain.Entities.ConversationStep.DraftFulfillment, ct, draft);
         }
         else
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the total amount in naira", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "I need a number for the total, e.g. 50000.",
                 state.Step, ct);
         }
+    }
+
+    private async Task HandleFulfillmentStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        // The vendor states which flow they are in: a rider, or they hand it
+        // over themselves. A rider needs driver details; self-delivery does not.
+        var t = text.Trim().ToUpperInvariant();
+        if (t is "2" or "SELF" or "SELFDELIVERY" or "SELF-DELIVERY" or "MYSELF" or "PICKUP" or "NO")
+        {
+            draft = draft with
+            {
+                Fulfillment = Domain.Enums.FulfillmentType.SelfDelivery,
+                DeliveryFeeNgn = 0,
+                DriverPhone = "",
+                DriverAccountNumber = "",
+                DriverBankCode = "",
+                DriverBankName = "",
+                DriverHolderName = ""
+            };
+            await AdvanceAsync(state, phone, replyTo, draft, ct);
+            return;
+        }
+        if (t is "1" or "YES" or "Y" or "DISPATCH" or "RIDER" or "DELIVERY")
+        {
+            draft = draft with
+            {
+                Fulfillment = Domain.Enums.FulfillmentType.Dispatch,
+                DriverPhone = "",
+                DriverAccountNumber = "",
+                DriverBankCode = "",
+                DriverBankName = "",
+                DriverHolderName = ""
+            };
+            await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDeliveryFee,
+                Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
+            return;
+        }
+        if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+            "how the order reaches the buyer (1 dispatch rider, 2 self-delivery)", ct))
+            return;
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskFulfillment,
+            state.Step, ct);
+    }
+
+    private async Task HandleFeeStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var digits = new string(text.Where(char.IsDigit).ToArray());
+        if (!long.TryParse(string.IsNullOrEmpty(digits) ? "0" : digits, out var fee) || fee < 0)
+        {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the delivery fee in naira", ct))
+                return;
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Send the delivery fee as a number, e.g. 5000 — or 0 for none.",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { DeliveryFeeNgn = fee };
+        if (fee == 0)
+        {
+            await AdvanceAsync(state, phone, replyTo, draft, ct);
+            return;
+        }
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverPhone,
+            Domain.Entities.ConversationStep.DraftDriverPhone, ct, draft);
+    }
+
+    private async Task HandleDriverPhoneStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var upper = text.ToUpperInvariant();
+        if (upper is "SKIP" or "NONE" or "0")
+        {
+            // No rider after all: this is a self-delivery, not a dispatch with
+            // missing details (which the API would reject). Fee is the rider's
+            // payout, so it goes to 0 with the rider fields.
+            draft = draft with
+            {
+                Fulfillment = Domain.Enums.FulfillmentType.SelfDelivery,
+                DeliveryFeeNgn = 0,
+                DriverPhone = "",
+                DriverAccountNumber = "",
+                DriverBankCode = "",
+                DriverBankName = "",
+                DriverHolderName = ""
+            };
+            await AdvanceAsync(state, phone, replyTo, draft, ct);
+            return;
+        }
+        var driverPhone = PhoneNormalizer.Normalize(text);
+        if (!PhoneNormalizer.LooksLikePhone(text))
+        {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the rider's phone number", ct))
+                return;
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "That doesn't look like a phone number. Send the driver's number or SKIP.",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { DriverPhone = _sanitizer.Clean(driverPhone, 20) };
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverAccount,
+            Domain.Entities.ConversationStep.DraftDriverAccount, ct, draft);
+    }
+
+    private async Task HandleDriverAccountStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var digits = new string(text.Where(char.IsDigit).ToArray());
+        if (digits.Length < 10)
+        {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the rider's account number", ct))
+                return;
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Account number should be at least 10 digits. Please resend it.",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { DriverAccountNumber = _sanitizer.Clean(digits, 20) };
+        await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverBankName,
+            Domain.Entities.ConversationStep.DraftDriverBankName, ct, draft);
+    }
+
+    private async Task HandleBuyerEmailStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var email = text.Trim().ToLowerInvariant();
+        if (!EmailChecker.IsPlausible(email))
+        {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the buyer's email address", ct))
+                return;
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "That doesn't look like an email address. Please send the buyer's email (e.g. chidi@example.com).",
+                state.Step, ct);
+            return;
+        }
+        draft = draft with { BuyerEmail = _sanitizer.Clean(email, 200) };
+        await AdvanceAsync(state, phone, replyTo, draft, ct);
+    }
+
+    private async Task HandleDriverBankNameStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        BankInfo? bank;
+        try
+        {
+            var banks = await _banks.GetBanksAsync(ct);
+            bank = BankDirectory.Match(text, banks);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Bank match failed");
+            bank = null;
+        }
+
+        if (bank is null)
+        {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the rider's bank name", ct))
+                return;
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "I couldn't find that bank. Send the full bank name (e.g. Guaranty Trust Bank) or its 3-digit code.",
+                state.Step, ct);
+            return;
+        }
+
+        InstaSafe.Application.Common.Interfaces.AccountResolveResult resolved;
+        try
+        {
+            resolved = await _paystack.ResolveAccountAsync(draft.DriverAccountNumber, bank.Code, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Driver account resolve failed");
+            resolved = new AccountResolveResult(
+                false, null, ResolveFailureKind.Unavailable,
+                "Bank verification is temporarily unavailable.");
+        }
+
+        if (!resolved.Success)
+        {
+            if (resolved.FailureKind == ResolveFailureKind.Unavailable)
+            {
+                // Verification service down (e.g. test-mode daily limit):
+                // don't block the order — vendor self-checks and continues.
+                draft = draft with
+                {
+                    DriverBankCode = bank.Code,
+                    DriverBankName = bank.Name,
+                    DriverHolderName = ""
+                };
+                await ReplyAndSaveAsync(state, phone, replyTo,
+                    $"Bank verification is temporarily unavailable, so I couldn't confirm the holder name.\n" +
+                    $"Please double-check these yourself — {bank.Name}, {draft.DriverAccountNumber}. " +
+                    "If they're correct, we'll continue.",
+                    Domain.Entities.ConversationStep.Confirming, ct, draft);
+                await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+                    Domain.Entities.ConversationStep.Confirming, ct, draft);
+                return;
+            }
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                $"I couldn't verify account {draft.DriverAccountNumber} at {bank.Name}. " +
+                "Please resend the driver account number, or CANCEL to stop.",
+                Domain.Entities.ConversationStep.DraftDriverAccount, ct,
+                draft with { DriverBankCode = "", DriverBankName = "" });
+            return;
+        }
+
+        var holder = resolved.AccountName!;
+        draft = draft with { DriverBankCode = bank.Code, DriverBankName = bank.Name, DriverHolderName = holder };
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            ConversationTexts.DriverDetailsConfirm(bank.Name, draft.DriverAccountNumber, holder),
+            Domain.Entities.ConversationStep.DraftDriverConfirm, ct, draft);
+    }
+
+    private async Task HandleDriverConfirmStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
+    {
+        var upper = text.ToUpperInvariant();
+        if (upper is "YES" or "Y" or "CONFIRM")
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            return;
+        }
+
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            ConversationTexts.DriverDetailsConfirm(
+                draft.DriverBankName, draft.DriverAccountNumber, draft.DriverHolderName) +
+                "\n(Reply YES to use these details, or CANCEL to stop)",
+            state.Step, ct);
     }
 
     private async Task HandleConfirmStepAsync(
@@ -329,6 +758,44 @@ public class ConversationRouter
     {
         try
         {
+            // Exactly-once: a prior YES may have created the order while the
+            // link reply failed to send. Resend the SAME link, never a new order.
+            if (draft.CreatedOrderId is not null)
+            {
+                var existing = await _mediator.Send(
+                    new InstaSafe.Application.Features.Orders.Queries.GetOrderById.GetOrderByIdQuery(
+                        draft.CreatedOrderId.Value), ct);
+                if (existing.IsSuccess)
+                {
+                    try
+                    {
+                        await SendWithTimeoutAsync(replyTo,
+                            ConversationTexts.VendorOrderSent(
+                                existing.Value!.OrderNumber, existing.Value.CustomerName, existing.Value.AmountKobo)
+                            + "\n(This is your existing order — no duplicate was created.)");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Vendor confirmation resend failed for order {OrderId}", existing.Value!.Id);
+                        return;
+                    }
+                    if (state.CurrentDraftId is not null)
+                    {
+                        var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+                        if (ticket is not null)
+                        {
+                            ticket.Status = Domain.Entities.DraftTicketStatus.Completed;
+                            ticket.CompletedOrderId = existing.Value!.Id;
+                        }
+                    }
+                    Reset(state);
+                    state.Touch();
+                    await _states.SaveAsync(ct);
+                    return;
+                }
+                draft = draft with { CreatedOrderId = null };
+            }
+
             var result = await _mediator.Send(new CreateOrderCommand(
                 phone,
                 draft.CustomerName,
@@ -336,23 +803,61 @@ public class ConversationRouter
                 draft.Address,
                 draft.Items.Select(i => new OrderItemInput(i.Description, i.Quantity, i.UnitPriceNgn)).ToList(),
                 draft.TotalNgn,
-                $"{phone}@whatsapp.instasafe"), ct);
+                string.IsNullOrWhiteSpace(draft.BuyerEmail)
+                    ? $"{phone}@whatsapp.instasafe"
+                    : draft.BuyerEmail,
+                Fulfillment: draft.Fulfillment ?? Domain.Enums.FulfillmentType.Dispatch,
+                DeliveryFeeNgn: draft.DeliveryFeeNgn,
+                DriverPhone: string.IsNullOrWhiteSpace(draft.DriverPhone) ? null : draft.DriverPhone,
+                DriverAccountNumber: string.IsNullOrWhiteSpace(draft.DriverAccountNumber) ? null : draft.DriverAccountNumber,
+                DriverBankCode: string.IsNullOrWhiteSpace(draft.DriverBankCode) ? null : draft.DriverBankCode), ct);
 
             if (result.IsSuccess)
             {
+                // Remember the created order BEFORE the vendor confirmation:
+                // if that send fails, the next YES resends the SAME link.
+                draft = draft with { CreatedOrderId = result.Value!.Id };
+                state.DraftJson = draft.Save();
+                state.Step = Domain.Entities.ConversationStep.Confirming;
+                if (state.CurrentDraftId is not null)
+                {
+                    var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+                    if (ticket is not null)
+                        ticket.DraftJson = draft.Save();
+                }
+                state.Touch();
+                await _states.SaveAsync(ct);
+                try
+                {
+                    // Payment link already went to the CUSTOMER (handler notifies
+                    // WhatsApp + email); the vendor just gets confirmation.
+                    await SendWithTimeoutAsync(replyTo,
+                        ConversationTexts.VendorOrderSent(
+                            result.Value!.OrderNumber, result.Value.CustomerName, result.Value.AmountKobo));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Vendor confirmation send failed for order {OrderId}; link resendable via YES", result.Value!.Id);
+                    return;
+                }
+                if (state.CurrentDraftId is not null)
+                {
+                    var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+                    if (ticket is not null)
+                    {
+                        ticket.Status = Domain.Entities.DraftTicketStatus.Completed;
+                        ticket.CompletedOrderId = result.Value!.Id;
+                    }
+                }
                 Reset(state);
                 state.Touch();
                 await _states.SaveAsync(ct);
-                await SendWithTimeoutAsync(replyTo,
-                    ConversationTexts.OrderCreated(result.Value!.AmountKobo, result.Value.PaystackAuthUrl));
                 return;
             }
 
+            await PersistAndResetAsync(state, ct);
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.OrderFailed(result.Error ?? "unknown error"),
                 Domain.Entities.ConversationStep.Idle, ct);
-            Reset(state);
-            state.Touch();
-            await _states.SaveAsync(ct);
         }
         catch (ValidationException ex)
         {
@@ -368,16 +873,112 @@ public class ConversationRouter
             await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.OrderFailed(ex.Message),
                 state.Step, ct, draft);
         }
+        catch (Exception ex)
+        {
+            // Anything else (Paystack/network/DB): never leave the vendor hanging.
+            // Draft stays resumable via Continue; details stay in logs + App Insights.
+            _logger.LogError(ex, "Order creation failed for {Phone}", phone);
+            await PersistAndResetAsync(state, ct);
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Something went wrong creating your order. Your progress is saved — try again from 4. Continue, or type MENU.",
+                Domain.Entities.ConversationStep.Idle, ct);
+        }
+    }
+
+    /// <summary>
+    /// Track step: a real reference tracks immediately (no AI cost); LIST
+    /// shows the vendor's recent orders for picking; anything else is
+    /// understood first (list my orders, chitchat, …).
+    /// </summary>
+    private async Task HandleTrackStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
+    {
+        if (text.Trim().Equals("LIST", StringComparison.OrdinalIgnoreCase))
+        {
+            await ReplyOwnOrdersAsync(state, phone, replyTo, ct);
+            return;
+        }
+
+        var order = await FindOrderAsync(text.Trim(), ct);
+        if (order is not null)
+        {
+            await SendTrackFoundAsync(state, phone, replyTo, order, ct);
+            return;
+        }
+
+        ChatIntent intent;
+        try
+        {
+            intent = await _parser.ClassifyIntentAsync(text, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Track-step classification failed");
+            intent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        }
+        if (intent.Kind == ChatIntentKind.ListOrders)
+        {
+            await ReplyOwnOrdersAsync(state, phone, replyTo, ct);
+            return;
+        }
+        await HandleIntentAsync(state, phone, replyTo, intent, text, ct);
+    }
+
+    /// <summary>
+    /// The vendor was shown a numbered list of their orders and replies with a
+    /// number to see full details. Anything else falls back to reference
+    /// lookup so a pasted code still works here.
+    /// </summary>
+    private async Task HandleOrderPickStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
+    {
+        if (int.TryParse(text.Trim(), out var n) && n >= 1)
+        {
+            var orders = await _orders.ListByVendorAsync(Guid.Empty, phone, 1, 5, ct);
+            if (n <= orders.Count)
+            {
+                await SendTrackFoundAsync(state, phone, replyTo, orders[n - 1], ct);
+                return;
+            }
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                $"I only listed {orders.Count}. Reply with a number from the list, paste a reference, or type MENU.",
+                state.Step, ct);
+            return;
+        }
+        await HandleTrackStepAsync(state, phone, replyTo, text, ct);
+    }
+
+    private async Task<Domain.Entities.Order?> FindOrderAsync(string reference, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(reference)) return null;
+        var refTrimmed = reference.Trim();
+        Domain.Entities.Order? order = null;
+        if (Guid.TryParse(refTrimmed, out var id))
+            order = await _orders.GetByIdAsync(id, ct);
+        order ??= await _orders.GetByOrderNumberAsync(refTrimmed.ToUpperInvariant(), ct);
+        order ??= await _orders.GetByPaystackRefAsync(refTrimmed, ct);
+        return order;
+    }
+
+    private async Task SendTrackFoundAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo,
+        Domain.Entities.Order order, CancellationToken ct)
+    {
+        var displayRef = !string.IsNullOrWhiteSpace(order.OrderNumber)
+            ? order.OrderNumber
+            : order.PaystackReference ?? order.Id.ToString();
+        Reset(state);
+        state.Touch();
+        await _states.SaveAsync(ct);
+        await SendWithTimeoutAsync(replyTo,
+            ConversationTexts.TrackResult(displayRef, order.Status.ToString(), order.AmountKobo));
     }
 
     private async Task LookupAndReplyTrackAsync(
         Domain.Entities.ConversationState state, string phone, string replyTo, string reference, CancellationToken ct)
     {
         var refTrimmed = reference.Trim();
-        Domain.Entities.Order? order = null;
-        if (Guid.TryParse(refTrimmed, out var id))
-            order = await _orders.GetByIdAsync(id, ct);
-        order ??= await _orders.GetByPaystackRefAsync(refTrimmed, ct);
+        var order = await FindOrderAsync(refTrimmed, ct);
 
         if (order is null)
         {
@@ -388,30 +989,151 @@ public class ConversationRouter
             return;
         }
 
-        var displayRef = order.PaystackReference ?? order.Id.ToString();
-        Reset(state);
-        state.Touch();
-        await _states.SaveAsync(ct);
-        await SendWithTimeoutAsync(replyTo,
-            ConversationTexts.TrackResult(displayRef, order.Status.ToString(), order.AmountKobo));
+        await SendTrackFoundAsync(state, phone, replyTo, order, ct);
     }
 
-    private async Task EnsureVendorAsync(string phone, CancellationToken ct)
+    /// <summary>
+    /// Bot access gate. Vendors (verified + onboarded + active) may chat;
+    /// everyone else is served through one-way notifications only.
+    /// </summary>
+    private async Task<bool> IsBotUserAsync(string phone, CancellationToken ct)
     {
         var vendor = await _vendors.GetByPhoneAsync(phone, ct);
-        if (vendor is null)
-            await _vendors.AddAsync(new Domain.Entities.Vendor
-            {
-                Phone = phone,
-                DisplayName = phone,
-                IsActive = true
-            }, ct);
+        return vendor is not null
+            && vendor.EmailVerified
+            && vendor.IsActive
+            && vendor.OnboardingCompleted;
     }
+
+    private async Task HandleBackStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, CancellationToken ct)
+    {
+        var draft = OrderDraft.Load(state.DraftJson);
+        var prev = PreviousStep(state.Step, draft);
+        if (prev is null)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                "Nothing to go back to — " + PromptFor(state.Step), state.Step, ct);
+            return;
+        }
+        var label = StepLabel(prev.Value);
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            $"Going back — {label}\n\n" + PromptFor(prev.Value), prev.Value, ct, draft);
+    }
+
+    /// <summary>
+    /// Previous ANSWERED step in canonical order, so re-answering flows
+    /// forward again via AdvanceAsync. Null when already at the start.
+    /// </summary>
+    private static Domain.Entities.ConversationStep? PreviousStep(
+        Domain.Entities.ConversationStep current, OrderDraft draft)
+    {
+        var chain = new List<(Domain.Entities.ConversationStep Step, bool Answered)>
+        {
+            (Domain.Entities.ConversationStep.DraftCustomerName, !string.IsNullOrWhiteSpace(draft.CustomerName)),
+            (Domain.Entities.ConversationStep.DraftCustomerPhone, !string.IsNullOrWhiteSpace(draft.CustomerPhone)),
+            (Domain.Entities.ConversationStep.DraftBuyerEmail, !string.IsNullOrWhiteSpace(draft.BuyerEmail)),
+            (Domain.Entities.ConversationStep.DraftAddress, !string.IsNullOrWhiteSpace(draft.Address)),
+            (Domain.Entities.ConversationStep.DraftItems, draft.Items.Count > 0),
+            (Domain.Entities.ConversationStep.DraftAmount, draft.TotalNgn > 0),
+            (Domain.Entities.ConversationStep.DraftFulfillment, draft.Fulfillment is not null),
+            (Domain.Entities.ConversationStep.DraftDeliveryFee, true),
+            (Domain.Entities.ConversationStep.DraftDriverPhone, !string.IsNullOrWhiteSpace(draft.DriverPhone)),
+            (Domain.Entities.ConversationStep.DraftDriverAccount, !string.IsNullOrWhiteSpace(draft.DriverAccountNumber)),
+            (Domain.Entities.ConversationStep.DraftDriverBankName, !string.IsNullOrWhiteSpace(draft.DriverBankCode)),
+            (Domain.Entities.ConversationStep.DraftDriverConfirm, !string.IsNullOrWhiteSpace(draft.DriverBankCode)),
+            (Domain.Entities.ConversationStep.Confirming, false)
+        };
+        var idx = chain.FindIndex(x => x.Step == current);
+        if (idx < 0) return null;
+        for (var i = idx - 1; i >= 0; i--)
+            if (chain[i].Answered) return chain[i].Step;
+        return null;
+    }
+
+    private static string StepLabel(Domain.Entities.ConversationStep step) => step switch
+    {
+        Domain.Entities.ConversationStep.DraftCustomerName => "customer name",
+        Domain.Entities.ConversationStep.DraftCustomerPhone => "customer phone",
+        Domain.Entities.ConversationStep.DraftBuyerEmail => "buyer email",
+        Domain.Entities.ConversationStep.DraftAddress => "delivery address",
+        Domain.Entities.ConversationStep.DraftItems => "items",
+        Domain.Entities.ConversationStep.DraftAmount => "total amount",
+        Domain.Entities.ConversationStep.DraftDeliveryFee => "delivery fee",
+        Domain.Entities.ConversationStep.DraftDriverPhone => "driver phone",
+        Domain.Entities.ConversationStep.DraftDriverAccount => "driver account",
+        Domain.Entities.ConversationStep.DraftDriverBankName => "driver bank",
+        Domain.Entities.ConversationStep.DraftDriverConfirm => "driver details",
+        _ => "previous question"
+    };
 
     private static void Reset(Domain.Entities.ConversationState state)
     {
         state.Step = Domain.Entities.ConversationStep.Idle;
         state.DraftJson = null;
+        state.CurrentDraftId = null;
+    }
+
+    /// <summary>
+    /// Saves in-progress work into its draft ticket (creating one when the
+    /// draft has content but no ticket yet), drops empty tickets, then resets
+    /// the live state. Drafts are never silently discarded.
+    /// </summary>
+    private async Task PersistAndResetAsync(Domain.Entities.ConversationState state, CancellationToken ct)
+    {
+        var draft = OrderDraft.Load(state.DraftJson);
+        if (state.CurrentDraftId is not null)
+        {
+            var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+            if (ticket is not null)
+            {
+                if (draft.IsEmpty())
+                    await _states.RemoveDraftAsync(ticket, ct);
+                else if (ticket.Status == Domain.Entities.DraftTicketStatus.Open)
+                    ticket.DraftJson = draft.Save();
+            }
+        }
+        else if (!draft.IsEmpty())
+        {
+            await _states.AddDraftAsync(new Domain.Entities.SavedOrderDraft
+            {
+                VendorPhone = state.Phone,
+                DraftJson = draft.Save(),
+                Status = Domain.Entities.DraftTicketStatus.Open
+            }, ct);
+        }
+        Reset(state);
+    }
+
+    /// <summary>Open drafts, lazily abandoning ones untouched for 7 days.</summary>
+    private async Task<List<Domain.Entities.SavedOrderDraft>> GetOpenDraftsAsync(
+        string phone, CancellationToken ct)
+    {
+        var cutoff = DateTimeOffset.UtcNow - DraftRetention;
+        var drafts = await _states.ListDraftsAsync(phone, Domain.Entities.DraftTicketStatus.Open, ct);
+        var fresh = new List<Domain.Entities.SavedOrderDraft>();
+        foreach (var d in drafts)
+        {
+            var touched = d.UpdatedAt ?? d.CreatedAt;
+            if (touched < cutoff)
+            {
+                var tracked = await _states.GetDraftAsync(d.Id, ct);
+                if (tracked is not null) tracked.Status = Domain.Entities.DraftTicketStatus.Abandoned;
+            }
+            else
+            {
+                fresh.Add(d);
+            }
+        }
+        return fresh;
+    }
+
+    private async Task<string> GetMenuAsync(string phone, CancellationToken ct)
+    {
+        var open = await GetOpenDraftsAsync(phone, ct);
+        return open.Count == 0
+            ? ConversationTexts.Menu
+            : ConversationTexts.MenuWithContinue(open.Count);
     }
 
     private async Task ReplyAndSaveAsync(
@@ -419,12 +1141,52 @@ public class ConversationRouter
         Domain.Entities.ConversationStep next, CancellationToken ct, OrderDraft? draft = null)
     {
         state.Step = next;
-        if (draft is not null) state.DraftJson = draft.Save();
+        if (draft is not null)
+        {
+            state.DraftJson = draft.Save();
+            await EnsureTicketAsync(state, draft, ct);
+        }
         else if (next == Domain.Entities.ConversationStep.Idle
             || next == Domain.Entities.ConversationStep.AwaitingMenuChoice) state.DraftJson = null;
         state.Touch();
         await _states.SaveAsync(ct);
         await SendWithTimeoutAsync(replyTo, reply);
+    }
+
+    /// <summary>
+    /// Every draft-bearing step mirrors into a ticket row so progress
+    /// survives resets and restarts. Empty drafts never create tickets.
+    /// </summary>
+    private async Task EnsureTicketAsync(
+        Domain.Entities.ConversationState state, OrderDraft draft, CancellationToken ct)
+    {
+        if (draft.IsEmpty()) return;
+        if (state.CurrentDraftId is not null)
+        {
+            var ticket = await _states.GetDraftAsync(state.CurrentDraftId.Value, ct);
+            if (ticket is not null)
+            {
+                if (ticket.Status == Domain.Entities.DraftTicketStatus.Open)
+                    ticket.DraftJson = draft.Save();
+                else
+                    state.CurrentDraftId = null;
+            }
+            else
+            {
+                state.CurrentDraftId = null;
+            }
+        }
+        if (state.CurrentDraftId is null)
+        {
+            var ticket = new Domain.Entities.SavedOrderDraft
+            {
+                VendorPhone = state.Phone,
+                DraftJson = draft.Save(),
+                Status = Domain.Entities.DraftTicketStatus.Open
+            };
+            await _states.AddDraftAsync(ticket, ct);
+            state.CurrentDraftId = ticket.Id;
+        }
     }
 
     private async Task SendWithTimeoutAsync(string replyTo, string reply)
@@ -439,24 +1201,141 @@ public class ConversationRouter
     private static string ConfirmText(OrderDraft draft) =>
         ConversationTexts.ConfirmSummary(
             draft.CustomerName, draft.CustomerPhone, draft.Address,
-            draft.ItemsSummary(), draft.TotalNgn);
+            draft.ItemsSummary(), draft.TotalNgn,
+            draft.DeliveryFeeNgn, draft.DriverPhone, draft.DriverBankName,
+            draft.DriverHolderName, draft.BuyerEmail,
+            draft.Fulfillment == Domain.Enums.FulfillmentType.SelfDelivery
+                ? "self-delivery (you deliver)"
+                : "dispatch rider");
 
     private static Domain.Entities.ConversationStep FirstMissingStep(OrderDraft draft)
     {
         if (string.IsNullOrWhiteSpace(draft.CustomerName)) return Domain.Entities.ConversationStep.DraftCustomerName;
         if (string.IsNullOrWhiteSpace(draft.CustomerPhone)) return Domain.Entities.ConversationStep.DraftCustomerPhone;
+        if (string.IsNullOrWhiteSpace(draft.BuyerEmail)) return Domain.Entities.ConversationStep.DraftBuyerEmail;
         if (string.IsNullOrWhiteSpace(draft.Address)) return Domain.Entities.ConversationStep.DraftAddress;
         if (draft.Items.Count == 0) return Domain.Entities.ConversationStep.DraftItems;
-        return Domain.Entities.ConversationStep.DraftAmount;
+        if (draft.TotalNgn <= 0) return Domain.Entities.ConversationStep.DraftAmount;
+        if (draft.Fulfillment is null) return Domain.Entities.ConversationStep.DraftFulfillment;
+        if (draft.WantsDispatch)
+        {
+            if (string.IsNullOrWhiteSpace(draft.DriverPhone)) return Domain.Entities.ConversationStep.DraftDriverPhone;
+            if (string.IsNullOrWhiteSpace(draft.DriverAccountNumber)) return Domain.Entities.ConversationStep.DraftDriverAccount;
+            if (string.IsNullOrWhiteSpace(draft.DriverBankCode)) return Domain.Entities.ConversationStep.DraftDriverBankName;
+        }
+        if (!draft.IsComplete()) return Domain.Entities.ConversationStep.DraftDeliveryFee;
+        return Domain.Entities.ConversationStep.Confirming;
+    }
+
+    /// <summary>
+    /// Single advancement rule for every draft step: complete → confirm
+    /// summary, otherwise prompt for the first missing field. Never re-asks
+    /// for fields already filled (e.g. resumed tickets).
+    /// </summary>
+    private async Task AdvanceAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, OrderDraft draft, CancellationToken ct)
+    {
+        if (draft.IsComplete())
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo, ConfirmText(draft),
+                Domain.Entities.ConversationStep.Confirming, ct, draft);
+            return;
+        }
+        var next = FirstMissingStep(draft);
+        await ReplyAndSaveAsync(state, phone, replyTo, PromptFor(next), next, ct, draft);
+    }
+
+    /// <summary>
+    /// Second-chance interpretation for input that failed a draft step's
+    /// validation. Asks the LLM whether the vendor is correcting an earlier
+    /// answer; if so the proposed value goes through the SAME per-field rules
+    /// the step handlers enforce before it touches the draft. The LLM only
+    /// proposes - it can never bypass scrutiny, need a live call, or invent a
+    /// field outside the closed set. Anything unusable (or any failure) comes
+    /// back false so the caller shows the original error. On success the bot
+    /// acknowledges and continues from wherever the draft now stands.
+    /// </summary>
+    private async Task<bool> TryCorrectAndContinueAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo,
+        OrderDraft draft, string rawText, string currentQuestion, CancellationToken ct)
+    {
+        CorrectionInterpretation interp;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(15));
+            interp = await _parser.InterpretCorrectionAsync(
+                rawText, currentQuestion, DraftSummary(draft), cts.Token);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Correction interpretation failed");
+            return false;
+        }
+        if (!interp.IsCorrection || string.IsNullOrWhiteSpace(interp.Field) || interp.Value is null)
+            return false;
+
+        var value = interp.Value.Trim();
+        (OrderDraft fixed_, string label)? applied = interp.Field.Trim().ToLowerInvariant() switch
+        {
+            "customer_name" when value.Length > 0 && value.Length <= 120
+                => (draft with { CustomerName = _sanitizer.Clean(value, 120) }, "customer name"),
+            "customer_phone" when PhoneNormalizer.LooksLikePhone(value)
+                => (draft with { CustomerPhone = _sanitizer.Clean(PhoneNormalizer.Normalize(value), 20) }, "customer phone"),
+            "buyer_email" when EmailChecker.IsPlausible(value.Trim().ToLowerInvariant())
+                => (draft with { BuyerEmail = _sanitizer.Clean(value.Trim().ToLowerInvariant(), 200) }, "buyer email"),
+            "address" when value.Length > 0
+                => (draft with { Address = _sanitizer.Clean(value, 500) }, "delivery address"),
+            "amount" when long.TryParse(new string(value.Where(char.IsDigit).ToArray()), out var amount) && amount > 0
+                => (draft with { TotalNgn = amount }, "total amount"),
+            "delivery_fee" when long.TryParse(new string(value.Where(char.IsDigit).ToArray()) is { Length: > 0 } d ? d : "0", out var fee) && fee >= 0
+                => (draft with { DeliveryFeeNgn = fee }, "delivery fee"),
+            "driver_phone" when PhoneNormalizer.LooksLikePhone(value)
+                => (draft with { DriverPhone = _sanitizer.Clean(PhoneNormalizer.Normalize(value), 20) }, "rider phone"),
+            "driver_account" when new string(value.Where(char.IsDigit).ToArray()).Length >= 10
+                => (draft with { DriverAccountNumber = _sanitizer.Clean(new string(value.Where(char.IsDigit).ToArray()), 20) }, "rider account"),
+            _ => ((OrderDraft, string)?)null
+        };
+        if (applied is null) return false;
+
+        await SendWithTimeoutAsync(replyTo, $"Got it — {applied.Value.label} updated. ✅");
+        await AdvanceAsync(state, phone, replyTo, applied.Value.fixed_, ct);
+        return true;
+    }
+
+    private static string DraftSummary(OrderDraft draft)
+    {
+        static string Show(string label, string v) =>
+            $"{label}: {(string.IsNullOrWhiteSpace(v) ? "MISSING" : v)}";
+        return string.Join("; ", new[]
+        {
+            Show("customer name", draft.CustomerName),
+            Show("customer phone", draft.CustomerPhone),
+            Show("buyer email", draft.BuyerEmail),
+            Show("delivery address", draft.Address),
+            $"items: {(draft.Items.Count == 0 ? "MISSING" : $"{draft.Items.Count} item(s)")}",
+            $"total: {(draft.TotalNgn <= 0 ? "MISSING" : $"₦{draft.TotalNgn:N0}")}",
+            $"fulfilment: {draft.Fulfillment?.ToString() ?? "MISSING"}",
+            $"delivery fee: ₦{draft.DeliveryFeeNgn:N0}",
+            Show("rider phone", draft.DriverPhone),
+            Show("rider account", draft.DriverAccountNumber),
+            Show("rider bank", draft.DriverBankName),
+        });
     }
 
     private static string PromptFor(Domain.Entities.ConversationStep step) => step switch
     {
         Domain.Entities.ConversationStep.DraftCustomerName => ConversationTexts.AskCustomerName,
         Domain.Entities.ConversationStep.DraftCustomerPhone => ConversationTexts.AskCustomerPhone,
+        Domain.Entities.ConversationStep.DraftBuyerEmail => ConversationTexts.AskBuyerEmail,
         Domain.Entities.ConversationStep.DraftAddress => ConversationTexts.AskAddress,
         Domain.Entities.ConversationStep.DraftItems => ConversationTexts.AskItems,
         Domain.Entities.ConversationStep.DraftAmount => ConversationTexts.AskAmount,
+        Domain.Entities.ConversationStep.DraftFulfillment => ConversationTexts.AskFulfillment,
+        Domain.Entities.ConversationStep.DraftDeliveryFee => ConversationTexts.AskDeliveryFee,
+        Domain.Entities.ConversationStep.DraftDriverPhone => ConversationTexts.AskDriverPhone,
+        Domain.Entities.ConversationStep.DraftDriverAccount => ConversationTexts.AskDriverAccount,
+        Domain.Entities.ConversationStep.DraftDriverBankName => ConversationTexts.AskDriverBankName,
         _ => ConversationTexts.Menu
     };
 }

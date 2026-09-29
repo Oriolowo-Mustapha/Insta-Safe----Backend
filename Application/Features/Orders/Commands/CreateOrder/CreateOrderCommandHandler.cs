@@ -60,7 +60,11 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
             Currency = "NGN",
             Status = OrderStatus.AwaitingPayment,
             Fulfillment = req.Fulfillment,
-            DeliveryFeeKobo = req.Fulfillment == FulfillmentType.Digital ? 0 : req.DeliveryFeeNgn * 100
+            // Digital is disabled, so the fee is always the dispatch fee. A
+            // dispatch order with a 0 fee is legal: that is the driver-less
+            // case, released by the buyer entering their OTP.
+            DeliveryFeeKobo = req.DeliveryFeeNgn * 100,
+            OrderNumber = await NextOrderNumberAsync(ct)
         };
 
         if (string.IsNullOrWhiteSpace(order.VendorPhone))
@@ -100,43 +104,25 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
 
         if (order.Fulfillment == FulfillmentType.Dispatch && !string.IsNullOrWhiteSpace(req.DriverPhone))
         {
+            // Driver payout details live per-order only (drivers hold no accounts).
             var driverPhone = PhoneNormalizer.Normalize(req.DriverPhone);
             var driver = await _drivers.GetByPhoneAsync(driverPhone, ct);
-            if (driver is null)
-            {
-                driver = new Dispatcher { Phone = driverPhone, IsActive = true };
-                await _drivers.AddAsync(driver, ct);
-            }
-            order.DriverId = driver.Id;
-            order.DriverPhone = driver.Phone;
+            if (driver is not null)
+                order.DriverId = driver.Id;
+            order.DriverPhone = driverPhone;
 
-            var driverAccount = req.DriverAccountNumber ?? driver.AccountNumber;
-            var driverBank = req.DriverBankCode ?? driver.BankCode;
-            if (driverAccount is not null && driverBank is not null)
+            if (req.DriverAccountNumber is not null && req.DriverBankCode is not null)
             {
-                var recipient = await _paystack.CreateRecipientAsync(driverAccount, driverBank, driver.Phone, ct);
+                var recipient = await _paystack.CreateRecipientAsync(
+                    req.DriverAccountNumber, req.DriverBankCode, driverPhone, ct);
                 if (recipient is not null)
-                {
                     order.DriverRecipientCode = recipient;
-                    if (req.DriverAccountNumber is not null && req.DriverBankCode is not null)
-                    {
-                        driver.AccountNumber = req.DriverAccountNumber;
-                        driver.BankCode = req.DriverBankCode;
-                        driver.PaystackRecipientCode = recipient;
-                        driver.Touch();
-                    }
-                }
-            }
-            else if (driver.PaystackRecipientCode is not null)
-            {
-                order.DriverRecipientCode = driver.PaystackRecipientCode;
             }
         }
 
         await _orders.AddAsync(order, ct);
 
-        var (reference, authUrl) = await _paystack.InitializeTransactionAsync(req.BuyerEmail!, order.AmountKobo, order.Id, ct);
-        order.PaystackReference = reference;
+        var (reference, authUrl) = await _paystack.InitializeTransactionAsync(req.BuyerEmail!, order.AmountKobo, order.Id, ct);        order.PaystackReference = reference;
         order.PaystackAuthUrl = authUrl;
         order.Status = OrderStatus.AwaitingPayment;
         order.Touch();
@@ -145,9 +131,25 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         await _orders.SaveAsync(ct);
 
         await _notifier.OrderCreatedAsync(order, OrderNotifier.IsRealEmail(order.BuyerEmail) ? order.BuyerEmail : null);
-        if (order.DriverPhone is not null)
-            await _notifier.DriverAssignedAsync(order);
+        await _notifier.PaymentLinkAsync(order);
+
+        // The rider is NOT notified here. /api/dispatch/assigned only lists
+        // Held|Delivered, so notifying at creation (status AwaitingPayment) told
+        // the rider they had a delivery while the portal showed nothing. The
+        // assignment message is sent from MarkFundsHeld instead, once escrow
+        // actually holds the buyer's money and the order is visible to the rider.
 
         return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
+    }
+
+    private async Task<string> NextOrderNumberAsync(CancellationToken ct)
+    {
+        for (var i = 0; i < 3; i++)
+        {
+            var candidate = OrderNumberGenerator.Generate();
+            if (await _orders.GetByOrderNumberAsync(candidate, ct) is null)
+                return candidate;
+        }
+        return OrderNumberGenerator.Generate();
     }
 }

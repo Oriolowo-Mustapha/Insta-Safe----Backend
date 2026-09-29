@@ -4,17 +4,52 @@ using Microsoft.Extensions.Logging;
 
 namespace InstaSafe.Application.Common.Notifications;
 
+/// <summary>
+/// All outbound buyer/vendor messaging for an order.
+/// </summary>
+/// <remarks>
+/// <b>The delivery OTP is WhatsApp-only, by construction.</b> No method here
+/// takes or sends an OTP over email: the buyer's code goes out over WhatsApp
+/// from the handler that mints it (MarkFundsHeld) or ConfirmDelivery asks the
+/// buyer for it. Email is reachable from a leaked mailbox or a forwarded
+/// thread, and this code releases real money, so it is not a channel we put it
+/// on. There was once a FundsHeldAsync that emailed the code; it was dead code
+/// and was deleted so nobody can wire it back up. If you are adding a
+/// notification and it needs the code, send WhatsApp.
+/// </remarks>
 public class OrderNotifier
 {
     private readonly IWhatsAppSender _wa;
     private readonly IEmailSender _email;
     private readonly IVendorRepository _vendors;
     private readonly ILogger<OrderNotifier> _logger;
+    private readonly string _frontendBaseUrl;
 
     public OrderNotifier(
-        IWhatsAppSender wa, IEmailSender email, IVendorRepository vendors, ILogger<OrderNotifier> logger)
+        IWhatsAppSender wa, IEmailSender email, IVendorRepository vendors,
+        ILogger<OrderNotifier> logger, Microsoft.Extensions.Configuration.IConfiguration? config = null)
     {
         _wa = wa; _email = email; _vendors = vendors; _logger = logger;
+        _frontendBaseUrl = (config?["Frontend:BaseUrl"] ?? "").TrimEnd('/');
+    }
+
+    private string TrackUrl(Order order) =>
+        string.IsNullOrWhiteSpace(_frontendBaseUrl) || string.IsNullOrWhiteSpace(order.OrderNumber)
+            ? ""
+            : $"{_frontendBaseUrl}/track/{order.OrderNumber}";
+
+    private string TrackLine(Order order)
+    {
+        var url = TrackUrl(order);
+        return string.IsNullOrEmpty(url) ? "" : $"\nTrack it live here: {url}";
+    }
+
+    private string TrackHtml(Order order)
+    {
+        var url = TrackUrl(order);
+        return string.IsNullOrEmpty(url)
+            ? ""
+            : $"<p>Track it live here: <a href=\"{url}\">{url}</a></p>";
     }
 
     public static bool IsRealEmail(string? email) =>
@@ -64,71 +99,94 @@ public class OrderNotifier
 
     private static string Money(long kobo) => $"₦{kobo / 100:N0}";
 
-    public async Task OrderCreatedAsync(Order order, string? buyerEmail)
+    private static string Num(Order order) =>
+        string.IsNullOrWhiteSpace(order.OrderNumber) ? order.Id.ToString()[..8] : order.OrderNumber;
+
+    private static string PayRef(Order order) =>
+        string.IsNullOrWhiteSpace(order.PaystackReference) ? "" : $"\n(Payment ref: {order.PaystackReference})";
+
+    public async Task PaymentLinkAsync(Order order)
     {
-        var link = order.PaystackAuthUrl ?? "";
-        await TryEmailAsync(buyerEmail, $"Pay for your order ({Money(order.AmountKobo)})",
-            $"<p>Hi {order.CustomerName},</p><p>Your order totals <b>{Money(order.AmountKobo)}</b>.</p><p><a href=\"{link}\">Pay securely with InstaSafe</a></p><p>Funds stay in escrow until you confirm delivery.</p>");
-        await SendVendorEmailAsync(order.VendorId, "New order created",
-            $"<p>Order {order.Id} for <b>{Money(order.AmountKobo)}</b> was created. Share the payment link with your buyer.</p><p>Check your dashboard for full details.</p>");
+        if (string.IsNullOrWhiteSpace(order.CustomerPhone) || string.IsNullOrWhiteSpace(order.PaystackAuthUrl)) return;
+        var name = string.IsNullOrWhiteSpace(order.CustomerName) ? "there" : order.CustomerName;
+        await TryWaAsync(order.CustomerPhone,
+            $"Hi {name}, order {order.OrderNumber} — your InstaSafe payment link for {Money(order.AmountKobo)}:\n{order.PaystackAuthUrl}\n" +
+            "Pay now — your money stays locked in escrow until you confirm delivery." + TrackLine(order));
     }
 
-    public async Task FundsHeldAsync(Order order, string otpCode, string? buyerEmail)
-    {
-        await TryEmailAsync(buyerEmail, "Payment received — escrow holding your funds",
-            $"<p>Hi {order.CustomerName},</p><p>We received <b>{Money(order.AmountKobo)}</b> for order {order.Id}.</p><p>Your delivery code is <b>{otpCode}</b>. Share it with the rider only when you receive your item.</p>");
+    public async Task OrderCreatedAsync(Order order, string? buyerEmail)    {
+        var link = order.PaystackAuthUrl ?? "";
+        await TryEmailAsync(buyerEmail, $"Pay for order {Num(order)} ({Money(order.AmountKobo)})",
+            $"<p>Hi {order.CustomerName},</p><p>Your order <b>{Num(order)}</b> totals <b>{Money(order.AmountKobo)}</b>.</p><p><a href=\"{link}\">Pay securely with InstaSafe</a></p><p>Funds stay in escrow until you confirm delivery.</p>{TrackHtml(order)}{PayRef(order)}");
+        await SendVendorEmailAsync(order.VendorId, "New order created",
+            $"<p>Order {Num(order)} for <b>{Money(order.AmountKobo)}</b> was created. Share the payment link with your buyer.</p><p>Check your dashboard for full details.</p>");
     }
 
     public async Task DriverAssignedAsync(Order order)
     {
         if (string.IsNullOrWhiteSpace(order.DriverPhone)) return;
         await TryWaAsync(order.DriverPhone,
-            $"InstaSafe delivery assigned 🚚\nOrder {order.Id}\nDeliver to: {order.DeliveryAddress}\nFee: {Money(order.DeliveryFeeKobo)}\nLog in to the driver portal to confirm on arrival. Check your dashboard for full details.");
+            $"InstaSafe delivery assigned 🚚\nOrder {Num(order)}\nDeliver to: {order.DeliveryAddress}\nFee: {Money(order.DeliveryFeeKobo)}" +
+            $"{TrackLine(order)}\nLog in to the driver portal to confirm on arrival. Check your dashboard for full details.");
+    }
+
+    public async Task BankTransferDetailsAsync(Order order)
+    {
+        if (string.IsNullOrWhiteSpace(order.PayVirtualAccountNumber)) return;
+        var amount = Money(order.AmountKobo);
+        await TryWaAsync(order.CustomerPhone,
+            $"InstaSafe: pay {amount} by bank transfer to complete order {Num(order)}:\n" +
+            $"Bank: {order.PayVirtualAccountBank}\nAccount: {order.PayVirtualAccountNumber}\n" +
+            $"Name: {order.PayVirtualAccountName}\nTransfer EXACTLY {amount} — your payment is confirmed automatically." + TrackLine(order));
+        await TryEmailAsync(order.BuyerEmail, $"Bank transfer details for order {Num(order)} ({amount})",
+            $"<p>Hi {order.CustomerName},</p><p>Pay <b>{amount}</b> by bank transfer for order <b>{Num(order)}</b>:</p>" +
+            $"<p>Bank: <b>{order.PayVirtualAccountBank}</b><br/>Account: <b>{order.PayVirtualAccountNumber}</b><br/>Name: {order.PayVirtualAccountName}</p>" +
+            $"<p>Transfer exactly {amount} — your payment is confirmed automatically and held in escrow.</p>{TrackHtml(order)}");
     }
 
     public async Task DeliveredAsync(Order order, string? buyerEmail)
     {
         var window = "You have 24 hours to inspect. If anything is wrong, tap Dispute on your order page — otherwise funds release automatically.";
         await TryWaAsync(order.VendorPhone,
-            $"InstaSafe: order {order.Id} marked DELIVERED ✅\n{window}\nCheck your dashboard for full details.");
+            $"InstaSafe: order {Num(order)} marked DELIVERED ✅\n{window}\nCheck your dashboard for full details.");
         await TryWaAsync(order.CustomerPhone,
-            $"InstaSafe: your order arrived ✅\n{window}");
-        await TryEmailAsync(buyerEmail, "Order delivered — 24h inspection window",
-            $"<p>Hi {order.CustomerName},</p><p>Order {order.Id} was marked delivered.</p><p>{window}</p>");
-        await SendVendorEmailAsync(order.VendorId, "Order delivered",
-            $"<p>Order {order.Id} was marked delivered. {window}</p>");
+            $"InstaSafe: your order {Num(order)} arrived ✅\n{window}");
+        await TryEmailAsync(buyerEmail, $"Order {Num(order)} delivered — 24h inspection window",
+            $"<p>Hi {order.CustomerName},</p><p>Order <b>{Num(order)}</b> was marked delivered.</p><p>{window}</p>{TrackHtml(order)}{PayRef(order)}");
+        await SendVendorEmailAsync(order.VendorId, $"Order {Num(order)} delivered",
+            $"<p>Order <b>{Num(order)}</b> was marked delivered. {window}</p>");
     }
 
     public async Task ReleasedAsync(Order order, string? buyerEmail, string? transferRef)
     {
         var payout = transferRef is null ? "Payout is being processed." : $"Transfer ref: {transferRef}.";
         await TryWaAsync(order.VendorPhone,
-            $"InstaSafe: funds released ✅ {Money(order.AmountKobo)} for order {order.Id}. {payout}\nCheck your dashboard for full details.");
+            $"InstaSafe: funds released ✅ {Money(order.AmountKobo)} for order {Num(order)}. {payout}\nCheck your dashboard for full details.");
         await TryWaAsync(order.CustomerPhone,
-            $"InstaSafe: order {order.Id} is complete. Thanks for buying safe ✅");
-        await TryEmailAsync(buyerEmail, "Order complete — funds released",
-            $"<p>Hi {order.CustomerName},</p><p>Order {order.Id} is complete and the vendor has been paid. {payout}</p>");
-        await SendVendorEmailAsync(order.VendorId, "Funds released",
-            $"<p>{Money(order.AmountKobo)} for order {order.Id} was released. {payout}</p>");
+            $"InstaSafe: order {Num(order)} is complete. Thanks for buying safe ✅");
+        await TryEmailAsync(buyerEmail, $"Order {Num(order)} complete — funds released",
+            $"<p>Hi {order.CustomerName},</p><p>Order <b>{Num(order)}</b> is complete and the vendor has been paid. {payout}</p>{TrackHtml(order)}{PayRef(order)}");
+        await SendVendorEmailAsync(order.VendorId, $"Funds released for order {Num(order)}",
+            $"<p>{Money(order.AmountKobo)} for order <b>{Num(order)}</b> was released. {payout}</p>");
     }
 
     public async Task RefundedAsync(Order order, string? buyerEmail)
     {
         await TryWaAsync(order.VendorPhone,
-            $"InstaSafe: order {order.Id} was refunded. Check your dashboard for full details.");
+            $"InstaSafe: order {Num(order)} was refunded. Check your dashboard for full details.");
         await TryWaAsync(order.CustomerPhone,
-            $"InstaSafe: order {order.Id} was refunded. Your money is on its way back.");
-        await TryEmailAsync(buyerEmail, "Order refunded",
-            $"<p>Hi {order.CustomerName},</p><p>Order {order.Id} was refunded. Your money is on its way back.</p>");
-        await SendVendorEmailAsync(order.VendorId, "Order refunded",
-            $"<p>Order {order.Id} was refunded to the buyer.</p>");
+            $"InstaSafe: order {Num(order)} was refunded. Your money is on its way back.");
+        await TryEmailAsync(buyerEmail, $"Order {Num(order)} refunded",
+            $"<p>Hi {order.CustomerName},</p><p>Order <b>{Num(order)}</b> was refunded. Your money is on its way back.</p>{TrackHtml(order)}{PayRef(order)}");
+        await SendVendorEmailAsync(order.VendorId, $"Order {Num(order)} refunded",
+            $"<p>Order <b>{Num(order)}</b> was refunded to the buyer.</p>");
     }
 
     public async Task DisputeFiledAsync(Order order, string reason)
     {
         await TryWaAsync(order.VendorPhone,
-            $"InstaSafe: buyer disputed order {order.Id} ⚠️\nReason: {reason}\nFunds are frozen. Resolve it on your dashboard.");
-        await SendVendorEmailAsync(order.VendorId, "Order disputed",
-            $"<p>Buyer disputed order {order.Id}.</p><p>Reason: {reason}</p><p>Funds are frozen until you resolve it.</p>");
+            $"InstaSafe: buyer disputed order {Num(order)} ⚠️\nReason: {reason}\nFunds are frozen. Resolve it on your dashboard.");
+        await SendVendorEmailAsync(order.VendorId, $"Order {Num(order)} disputed",
+            $"<p>Buyer disputed order <b>{Num(order)}</b>.</p><p>Reason: {reason}</p><p>Funds are frozen until you resolve it.</p>");
     }
 }

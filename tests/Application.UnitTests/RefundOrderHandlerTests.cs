@@ -18,6 +18,8 @@ public class RefundOrderHandlerTests
             => Task.FromResult(Orders.FirstOrDefault(o => o.Id == id));
         public Task<Order?> GetByPaystackRefAsync(string reference, CancellationToken ct)
             => Task.FromResult(Orders.FirstOrDefault(o => o.PaystackReference == reference));
+        public Task<Order?> GetByOrderNumberAsync(string orderNumber, CancellationToken ct)
+            => Task.FromResult(Orders.FirstOrDefault(o => o.OrderNumber == orderNumber));
         public Task AddAsync(Order order, CancellationToken ct)
         {
             Orders.Add(order);
@@ -30,6 +32,8 @@ public class RefundOrderHandlerTests
             => Task.FromResult(Orders.Where(o => o.VendorId == vendorId || o.VendorPhone == vendorPhone).ToList());
         public Task<List<Order>> ListByDriverAsync(Guid driverId, string driverPhone, int page, int pageSize, CancellationToken ct)
             => Task.FromResult(Orders.Where(o => o.DriverId == driverId || o.DriverPhone == driverPhone).ToList());
+        public Task<List<Order>> ListUnpaidByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Orders.Where(o => o.BuyerEmail == email).ToList());
     }
 
     private sealed class NullSender : IWhatsAppSender
@@ -51,6 +55,8 @@ public class RefundOrderHandlerTests
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken ct) => Task.FromResult(false);
         public Task<Vendor?> GetByIdAsync(Guid id, CancellationToken ct) => Task.FromResult<Vendor?>(null);
         public Task<Vendor?> GetByPhoneAsync(string phone, CancellationToken ct) => Task.FromResult<Vendor?>(null);
+        public Task<Vendor?> GetByEmailAsync(string email, CancellationToken ct) => Task.FromResult<Vendor?>(null);
+        public Task<bool> ExistsByEmailAsync(string email, CancellationToken ct) => Task.FromResult(false);
         public Task<List<Vendor>> ListAsync(int page, int pageSize, bool? activeOnly, CancellationToken ct)
             => Task.FromResult(new List<Vendor>());
         public Task SaveAsync(CancellationToken ct) => Task.CompletedTask;
@@ -76,6 +82,17 @@ public class RefundOrderHandlerTests
                 ? (true, "RFND_TEST", (string?)null)
                 : (false, (string?)null, "Paystack refund rejected (400)."));
         }
+        public Task<(bool Success, string? CustomerCode, string? Error)> CreateCustomerAsync(string email, string firstName, string lastName, string phone, System.Guid orderId, CancellationToken ct)
+            => Task.FromResult((true, (string?)"CUS_TEST", (string?)null));
+        public Task<(bool Success, string? AccountNumber, string? AccountName, string? Bank, string? Error)> AssignDedicatedAccountAsync(string customerCode, string? preferredBank, CancellationToken ct)
+            => Task.FromResult((true, (string?)"0123456789", (string?)"IN Heap Ogbonna", (string?)"Wema", (string?)null));
+        public Task<System.Collections.Generic.List<(string Name, string Slug, string Code)>> ListTransferBanksAsync(CancellationToken ct)
+            => Task.FromResult(new System.Collections.Generic.List<(string Name, string Slug, string Code)>());
+        public Task<AccountResolveResult> ResolveAccountAsync(
+            string accountNumber, string bankCode, CancellationToken ct)
+            => Task.FromResult(new AccountResolveResult(true, "Ada Obi", ResolveFailureKind.Invalid, ""));
+        public Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
+            => Task.FromResult(new List<(string Name, string Slug, string Code)>());
     }
 
     private static (RefundOrderCommandHandler Handler, FakeOrders Orders, FakePaystack Paystack) Create()
@@ -178,3 +195,4 @@ public class RefundOrderHandlerTests
         Assert.False(result.IsSuccess);
     }
 }
+

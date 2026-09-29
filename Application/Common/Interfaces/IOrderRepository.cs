@@ -6,6 +6,8 @@ public interface IOrderRepository
 {
     Task<Order?> GetByIdAsync(Guid id, CancellationToken ct);
     Task<Order?> GetByPaystackRefAsync(string reference, CancellationToken ct);
+    Task<Order?> GetByOrderNumberAsync(string orderNumber, CancellationToken ct);
+    Task<List<Order>> ListUnpaidByEmailAsync(string email, CancellationToken ct);
     Task AddAsync(Order order, CancellationToken ct);
     Task SaveAsync(CancellationToken ct);
     Task<List<Order>> ListAsync(int page, int pageSize, CancellationToken ct);

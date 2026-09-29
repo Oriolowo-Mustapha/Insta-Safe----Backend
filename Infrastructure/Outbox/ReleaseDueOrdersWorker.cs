@@ -16,6 +16,17 @@ public class ReleaseDueOrdersWorker : BackgroundService
 {
     public static readonly TimeSpan DigitalAutoReleaseAfter = TimeSpan.FromHours(24);
 
+    /// <summary>
+    /// Grace period before a self-delivery order auto-releases.
+    ///
+    /// A self-delivery order has no rider, so nothing can confirm delivery and
+    /// the buyer's OTP is voluntary. Without this backstop their escrow is
+    /// stranded forever if they never enter the code. Orders WITH a rider are
+    /// deliberately excluded - those still require the rider to confirm, and an
+    /// unactioned rider is an operations problem, not an auto-release one.
+    /// </summary>
+    public static readonly TimeSpan SelfDeliveryAutoReleaseAfter = TimeSpan.FromHours(24);
+
     private readonly IServiceProvider _sp;
     private readonly ILogger<ReleaseDueOrdersWorker> _logger;
 
@@ -51,7 +62,24 @@ public class ReleaseDueOrdersWorker : BackgroundService
                     .OrderBy(o => o.HeldAt)
                     .Take(20)
                     .ToListAsync(ct);
-                var due = deliveredDue.Concat(digitalDue).Take(20).ToList();
+                // Self-delivery (and pre-existing driver-less Dispatch rows from
+                // before fulfilment was made explicit): the safety net that keeps
+                // a buyer's escrow from being stranded when nobody can confirm.
+                var selfDeliveryDue = await db.Orders
+                    .Where(o => o.Status == OrderStatus.Held
+                        && o.HeldAt != null
+                        && o.HeldAt <= now.Subtract(SelfDeliveryAutoReleaseAfter)
+                        && (o.Fulfillment == FulfillmentType.SelfDelivery
+                            || (o.Fulfillment == FulfillmentType.Dispatch && o.DriverPhone == null)))
+                    .OrderBy(o => o.HeldAt)
+                    .Take(20)
+                    .ToListAsync(ct);
+                var due = deliveredDue
+                    .Concat(digitalDue)
+                    .Concat(selfDeliveryDue)
+                    .Distinct()
+                    .Take(20)
+                    .ToList();
 
                 foreach (var order in due)
                 {

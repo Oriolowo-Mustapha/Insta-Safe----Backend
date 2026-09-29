@@ -25,6 +25,9 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<Dispatcher> Dispatchers => Set<Dispatcher>();
     public DbSet<ConversationState> ConversationStates => Set<ConversationState>();
+    public DbSet<SavedOrderDraft> SavedOrderDrafts => Set<SavedOrderDraft>();
+    public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<AdminAuditLog> AdminAuditLogs => Set<AdminAuditLog>();
     public DbSet<EscrowLedger> Ledgers => Set<EscrowLedger>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
@@ -43,7 +46,10 @@ public class AppDbContext : DbContext, IAppDbContext
             e.Property(x => x.BankCode).HasMaxLength(10);
             e.Property(x => x.PaystackRecipientCode).HasMaxLength(100);
             e.Property(x => x.OtpHash).HasMaxLength(200);
+            e.Property(x => x.PasswordHash).HasMaxLength(500);
+            e.Property(x => x.EmailOtpHash).HasMaxLength(200);
             e.HasIndex(x => x.Phone).IsUnique();
+            e.HasIndex(x => x.Email).IsUnique();
         });
 
         b.Entity<ConversationState>(e =>
@@ -54,15 +60,39 @@ public class AppDbContext : DbContext, IAppDbContext
             e.HasIndex(x => x.Phone).IsUnique();
         });
 
+        b.Entity<ChatMessage>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Phone).HasMaxLength(20).IsRequired();
+            e.Property(x => x.Body).HasMaxLength(1000).IsRequired();
+            e.HasIndex(x => x.Phone);
+            e.HasIndex(x => x.CreatedAt);
+        });
+
+        b.Entity<SavedOrderDraft>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.VendorPhone).HasMaxLength(20).IsRequired();
+            e.Property(x => x.DraftJson).HasMaxLength(4000).IsRequired();
+            e.HasIndex(x => x.VendorPhone);
+            e.HasIndex(x => x.Status);
+        });
+
+        b.Entity<AdminAuditLog>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Actor).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Action).HasMaxLength(100).IsRequired();
+            e.Property(x => x.TargetType).HasMaxLength(100).IsRequired();
+            e.Property(x => x.TargetId).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Note).HasMaxLength(1000);
+            e.HasIndex(x => x.CreatedAt);
+        });
+
         b.Entity<Dispatcher>(e =>
         {
             e.HasKey(x => x.Id);
             e.Property(x => x.Phone).HasMaxLength(20).IsRequired();
-            e.Property(x => x.FirstName).HasMaxLength(120);
-            e.Property(x => x.LastName).HasMaxLength(120);
-            e.Property(x => x.AccountNumber).HasMaxLength(20);
-            e.Property(x => x.BankCode).HasMaxLength(10);
-            e.Property(x => x.PaystackRecipientCode).HasMaxLength(100);
             e.Property(x => x.OtpHash).HasMaxLength(200);
             e.HasIndex(x => x.Phone).IsUnique();
         });
@@ -70,6 +100,8 @@ public class AppDbContext : DbContext, IAppDbContext
         b.Entity<Order>(e =>
         {
             e.HasKey(x => x.Id);
+            e.Property(x => x.OrderNumber).HasMaxLength(20).IsRequired();
+            e.HasIndex(x => x.OrderNumber).IsUnique();
             e.HasOne(x => x.Vendor).WithMany().HasForeignKey(x => x.VendorId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Driver).WithMany().HasForeignKey(x => x.DriverId).OnDelete(DeleteBehavior.Restrict);
             e.Property(x => x.DriverPhone).HasMaxLength(20);
@@ -91,6 +123,10 @@ public class AppDbContext : DbContext, IAppDbContext
             e.Property(x => x.PaystackAuthUrl).HasMaxLength(1000);
             e.Property(x => x.VendorRecipientCode).HasMaxLength(100);
             e.Property(x => x.RefundReference).HasMaxLength(100);
+            e.Property(x => x.PaystackCustomerCode).HasMaxLength(100);
+            e.Property(x => x.PayVirtualAccountNumber).HasMaxLength(20);
+            e.Property(x => x.PayVirtualAccountBank).HasMaxLength(120);
+            e.Property(x => x.PayVirtualAccountName).HasMaxLength(200);
             e.OwnsMany(x => x.Items, ib =>
             {
                 ib.ToJson();

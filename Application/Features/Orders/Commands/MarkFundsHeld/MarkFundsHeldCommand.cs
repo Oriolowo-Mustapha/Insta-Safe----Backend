@@ -4,4 +4,8 @@ using MediatR;
 
 namespace InstaSafe.Application.Features.Orders.Commands.MarkFundsHeld;
 
-public sealed record MarkFundsHeldCommand(string PaystackReference) : IRequest<Result<OrderDto>>;
+public sealed record MarkFundsHeldCommand(
+    string PaystackReference,
+    string? CustomerEmail = null,
+    long? AmountKobo = null
+) : IRequest<Result<OrderDto>>;

@@ -13,7 +13,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace InstaSafe.Application.Features.Orders.Commands.ConfirmSatisfaction;
 
-public class ConfirmSatisfactionCommandHandler : IRequestHandler<ConfirmSatisfactionCommand, Result<OrderDto>>
+public class ConfirmSatisfactionCommandHandler : IRequestHandler<ConfirmSatisfactionCommand, Result<PublicOrderDto>>
 {
     private readonly IOrderRepository _orders;
     private readonly IAppDbContext _db;
@@ -28,13 +28,13 @@ public class ConfirmSatisfactionCommandHandler : IRequestHandler<ConfirmSatisfac
         _orders = orders; _db = db; _paystack = paystack; _notifier = notifier; _mapper = mapper;
     }
 
-    public async Task<Result<OrderDto>> Handle(ConfirmSatisfactionCommand req, CancellationToken ct)
+    public async Task<Result<PublicOrderDto>> Handle(ConfirmSatisfactionCommand req, CancellationToken ct)
     {
         var order = await _orders.GetByIdAsync(req.OrderId, ct);
         if (order is null)
-            return Result<OrderDto>.Failure("Order not found.");
+            return Result<PublicOrderDto>.Failure("Order not found.");
         if (order.Fulfillment != FulfillmentType.Digital)
-            return Result<OrderDto>.Failure("Only digital orders use buyer confirmation.");
+            return Result<PublicOrderDto>.Failure("Only digital orders use buyer confirmation.");
         if (order.Status != OrderStatus.Held)
             throw new ConflictException($"Order is {order.Status}, confirmation not expected.");
 
@@ -68,6 +68,6 @@ public class ConfirmSatisfactionCommandHandler : IRequestHandler<ConfirmSatisfac
 
         await _notifier.ReleasedAsync(order, order.BuyerEmail, transferRef);
 
-        return Result<OrderDto>.Success(_mapper.Map<OrderDto>(order));
+        return Result<PublicOrderDto>.Success(_mapper.Map<PublicOrderDto>(order));
     }
 }

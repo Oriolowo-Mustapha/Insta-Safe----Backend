@@ -6,16 +6,55 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
+using Serilog.Formatting.Compact;
+using Serilog.Sinks.ApplicationInsights.TelemetryConverters;
 using System.Text;
 
 Env.TraversePath().Load();
 
+if (args.Length == 2 && args[0] == "hash-password")
+{
+    Console.WriteLine(new InstaSafe.Infrastructure.Services.PasswordHasher().Hash(args[1]));
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((ctx, cfg) =>
+{
     cfg.ReadFrom.Configuration(ctx.Configuration)
        .Enrich.FromLogContext()
-       .WriteTo.Console());
+       .Enrich.WithMachineName()
+       .Enrich.WithEnvironmentName();
+
+    // Render/Railway-style: single-line JSON in production, human-readable locally.
+    if (ctx.HostingEnvironment.IsDevelopment())
+        cfg.WriteTo.Console();
+    else
+        cfg.WriteTo.Console(new CompactJsonFormatter());
+
+    // Application Insights when configured (Azure). Absent locally = no-op.
+    var aiConnection = ctx.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+    if (!string.IsNullOrWhiteSpace(aiConnection))
+        cfg.WriteTo.ApplicationInsights(aiConnection, new TraceTelemetryConverter());
+
+    // Windows App Service swallows console stdout (generated web.config sets
+    // stdoutLogEnabled=false), so also log to LogFiles where Log Stream tails.
+    // Active only on Azure (WEBSITE_SITE_NAME) unless Serilog:FileDir overrides.
+    var fileDir = ctx.Configuration["Serilog:FileDir"];
+    if (!string.IsNullOrWhiteSpace(fileDir) || Environment.GetEnvironmentVariable("WEBSITE_SITE_NAME") is not null)
+    {
+        var dir = string.IsNullOrWhiteSpace(fileDir)
+            ? Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? ".", "LogFiles", "Application")
+            : fileDir;
+        cfg.WriteTo.File(new CompactJsonFormatter(), Path.Combine(dir, "instasafe-.log"),
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 7,
+            shared: true);
+    }
+});
+
+builder.Services.AddApplicationInsightsTelemetry();
 
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
@@ -26,8 +65,20 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
 builder.Services.AddSwaggerGen(o =>
 {
-	o.CustomSchemaIds(type => type.FullName);
 	o.SwaggerDoc("v1", new() { Title = "InstaSafe API", Version = "v1" });
+	o.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.OpenApiSecurityScheme
+	{
+		Description = "Vendor/driver JWT. Enter: Bearer {your token}",
+		Name = "Authorization",
+		In = Microsoft.OpenApi.ParameterLocation.Header,
+		Type = Microsoft.OpenApi.SecuritySchemeType.Http,
+		Scheme = "bearer",
+		BearerFormat = "JWT"
+	});
+	o.AddSecurityRequirement(doc => new Microsoft.OpenApi.OpenApiSecurityRequirement
+	{
+		[new Microsoft.OpenApi.OpenApiSecuritySchemeReference("Bearer", doc)] = []
+	});
 });
 
 builder.Services.AddInfrastructure(builder.Configuration);
@@ -65,6 +116,9 @@ if (string.Equals(builder.Configuration["ApplyMigrations"], "true", StringCompar
 }
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+app.UseMiddleware<RequestCorrelationMiddleware>();
+app.UseSerilogRequestLogging(o =>
+    o.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.00} ms [{RequestId}]");
 
 app.UseAuthentication();
 app.UseAuthorization();

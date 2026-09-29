@@ -5,11 +5,13 @@ using InstaSafe.Application.Features.Orders.Commands.ParseOrderText;
 using InstaSafe.Application.Features.Orders.Commands.ConfirmSatisfaction;
 using InstaSafe.Application.Features.Orders.Commands.DisputeOrder;
 using InstaSafe.Application.Features.Orders.Commands.RefundOrder;
+using InstaSafe.Application.Features.Orders.Commands.RequestBankTransfer;
 using InstaSafe.Application.Features.Orders.Commands.ResolveDispute;
 using InstaSafe.Application.Features.Orders.Commands.VerifyOtp;
 using InstaSafe.Application.Features.Orders.DTOs;
 using InstaSafe.Application.Features.Orders.Queries.GetOrderById;
 using InstaSafe.Application.Features.Orders.Queries.GetOrderByReference;
+using InstaSafe.Application.Features.Orders.Queries.GetOrderTimeline;
 using InstaSafe.Application.Features.Vendors.Queries.GetVendorOrders;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
@@ -43,7 +45,7 @@ public class OrdersController : ControllerBase
             return Forbid();
         var result = await _mediator.Send(cmd, ct);
         if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Order created. Share the payment link with the buyer."));
+        return Ok(ApiResponse<OrderDto>.FromResult(result, "Order created. Payment link sent to the customer via WhatsApp and email."));
     }
 
     [HttpPost("parse")]
@@ -65,11 +67,21 @@ public class OrdersController : ControllerBase
 
     [HttpGet("by-reference/{reference}")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> GetByReference(string reference, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<PublicOrderDto>>> GetByReference(string reference, CancellationToken ct)
     {
         var result = await _mediator.Send(new GetOrderByReferenceQuery(reference), ct);
-        if (!result.IsSuccess) return NotFound(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result));
+        if (!result.IsSuccess) return NotFound(ApiResponse<PublicOrderDto>.FromResult(result));
+        return Ok(ApiResponse<PublicOrderDto>.FromResult(result));
+    }
+
+    /// <summary>Public customer tracker: ordered status timeline for an order reference. No auth.</summary>
+    [HttpGet("by-reference/{reference}/timeline")]
+    [AllowAnonymous]
+    public async Task<ActionResult<ApiResponse<OrderTimelineDto>>> GetTimeline(string reference, CancellationToken ct)
+    {
+        var result = await _mediator.Send(new GetOrderTimelineQuery(reference), ct);
+        if (!result.IsSuccess) return NotFound(ApiResponse<OrderTimelineDto>.FromResult(result));
+        return Ok(ApiResponse<OrderTimelineDto>.FromResult(result));
     }
 
     [HttpGet]
@@ -85,16 +97,31 @@ public class OrdersController : ControllerBase
 
     [HttpPost("{id:guid}/verify-otp")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> VerifyOtp(
+    public async Task<ActionResult<ApiResponse<PublicOrderDto>>> VerifyOtp(
         Guid id, [FromBody] VerifyOtpRequest body, CancellationToken ct)
     {
         var result = await _mediator.Send(new VerifyOtpCommand(id, body.Otp), ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Funds released to vendor."));
+        if (!result.IsSuccess) return BadRequest(ApiResponse<PublicOrderDto>.FromResult(result));
+        return Ok(ApiResponse<PublicOrderDto>.FromResult(result, "Funds released to vendor."));
     }
 
-    [HttpPost("{id:guid}/refund")]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> Refund(Guid id, CancellationToken ct)
+    /// <summary>
+    /// Issue a dedicated bank-transfer account for this order.
+    /// Buyer transfers the exact total; funds auto-confirm into escrow.
+    /// </summary>
+    [HttpPost("{id:guid}/request-bank-transfer")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> RequestBankTransfer(
+        Guid id, [FromBody] BankTransferRequest body, CancellationToken ct)
+    {
+        var existing = await _mediator.Send(new GetOrderByIdQuery(id), ct);
+        if (!existing.IsSuccess) return NotFound(ApiResponse<OrderDto>.FromResult(existing));
+        if (!Owns(existing.Value!)) return Forbid();
+        var result = await _mediator.Send(new RequestBankTransferCommand(id, body?.PreferredBank), ct);
+        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
+        return Ok(ApiResponse<OrderDto>.FromResult(result, "Transfer account issued. Buyer notified."));
+    }
+
+    [HttpPost("{id:guid}/refund")]    public async Task<ActionResult<ApiResponse<OrderDto>>> Refund(Guid id, CancellationToken ct)
     {
         var existing = await _mediator.Send(new GetOrderByIdQuery(id), ct);
         if (!existing.IsSuccess) return NotFound(ApiResponse<OrderDto>.FromResult(existing));
@@ -106,21 +133,21 @@ public class OrdersController : ControllerBase
 
     [HttpPost("{id:guid}/confirm-satisfaction")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> ConfirmSatisfaction(Guid id, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<PublicOrderDto>>> ConfirmSatisfaction(Guid id, CancellationToken ct)
     {
         var result = await _mediator.Send(new ConfirmSatisfactionCommand(id), ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Order confirmed. Funds released to vendor."));
+        if (!result.IsSuccess) return BadRequest(ApiResponse<PublicOrderDto>.FromResult(result));
+        return Ok(ApiResponse<PublicOrderDto>.FromResult(result, "Order confirmed. Funds released to vendor."));
     }
 
     [HttpPost("{id:guid}/dispute")]
     [AllowAnonymous]
-    public async Task<ActionResult<ApiResponse<OrderDto>>> Dispute(
+    public async Task<ActionResult<ApiResponse<PublicOrderDto>>> Dispute(
         Guid id, [FromBody] DisputeRequest body, CancellationToken ct)
     {
         var result = await _mediator.Send(new DisputeOrderCommand(id, body.Reason), ct);
-        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
-        return Ok(ApiResponse<OrderDto>.FromResult(result, "Dispute filed. Funds frozen until resolved."));
+        if (!result.IsSuccess) return BadRequest(ApiResponse<PublicOrderDto>.FromResult(result));
+        return Ok(ApiResponse<PublicOrderDto>.FromResult(result, "Dispute filed. Funds frozen until resolved."));
     }
 
     [HttpPost("{id:guid}/resolve-dispute")]
@@ -140,4 +167,5 @@ public class OrdersController : ControllerBase
     public sealed record VerifyOtpRequest(string Otp);
     public sealed record DisputeRequest(string Reason);
     public sealed record ResolveDisputeRequest(string Resolution);
+    public sealed record BankTransferRequest(string? PreferredBank);
 }

@@ -4,4 +4,4 @@ using MediatR;
 
 namespace InstaSafe.Application.Features.Orders.Commands.DisputeOrder;
 
-public sealed record DisputeOrderCommand(Guid OrderId, string Reason) : IRequest<Result<OrderDto>>;
+public sealed record DisputeOrderCommand(Guid OrderId, string Reason) : IRequest<Result<PublicOrderDto>>;

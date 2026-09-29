@@ -4,6 +4,7 @@ using InstaSafe.Application.Features.Webhooks.Commands.ProcessOpenWAWebhook;
 using InstaSafe.Domain.Entities;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -67,13 +68,93 @@ public class WebhooksController : ControllerBase
         if (!valid) return Unauthorized();
 
         using var doc = JsonDocument.Parse(body);
-        var evt = doc.RootElement.GetProperty("event").GetString();
+        var root = doc.RootElement;
+        var evt = root.GetProperty("event").GetString();
         if (evt == "charge.success")
         {
-            var reference = doc.RootElement.GetProperty("data").GetProperty("reference").GetString()!;
-            await _mediator.Send(new MarkFundsHeldCommand(reference), ct);
+            var data = root.GetProperty("data");
+            var reference = data.GetProperty("reference").GetString()!;
+            var (customerEmail, amountKobo) = ExtractCustomer(data);
+            await _mediator.Send(new MarkFundsHeldCommand(reference, customerEmail, amountKobo), ct);
+        }
+        else if (evt == "dedicatedaccount.assign.success")
+        {
+            await HandleDedicatedAssignAsync(root.GetProperty("data"), true, ct);
+        }
+        else if (evt is "dedicatedaccount.assign.failed" or "customeridentification.failed")
+        {
+            await HandleDedicatedAssignAsync(root.GetProperty("data"), false, ct);
         }
         return Ok();
+    }
+
+    private static (string? Email, long? AmountKobo) ExtractCustomer(JsonElement data)
+    {
+        try
+        {
+            string? email = null;
+            if (data.TryGetProperty("customer", out var c) && c.ValueKind == JsonValueKind.Object
+                && c.TryGetProperty("email", out var e))
+                email = e.GetString();
+            long? amount = data.TryGetProperty("amount", out var a) && a.ValueKind == JsonValueKind.Number
+                ? a.GetInt64() : null;
+            return (email, amount);
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
+
+    private async Task HandleDedicatedAssignAsync(JsonElement data, bool success, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = HttpContext.RequestServices.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<IAppDbContext>();
+
+            string? customerCode = null;
+            if (data.TryGetProperty("customer", out var c) && c.ValueKind == JsonValueKind.Object
+                && c.TryGetProperty("customer_code", out var cc))
+                customerCode = cc.GetString();
+
+            InstaSafe.Domain.Entities.Order? order = null;
+            if (!string.IsNullOrWhiteSpace(customerCode))
+                order = await db.Orders.FirstOrDefaultAsync(
+                    o => o.PaystackCustomerCode == customerCode, ct);
+            if (order is null) return;
+
+            if (success)
+            {
+                string? number = null, name = null, bank = null;
+                if (data.TryGetProperty("dedicated_account", out var d) && d.ValueKind == JsonValueKind.Object)
+                {
+                    if (d.TryGetProperty("account_number", out var a)) number = a.GetString();
+                    if (d.TryGetProperty("account_name", out var n)) name = n.GetString();
+                    if (d.TryGetProperty("bank", out var b) && b.ValueKind == JsonValueKind.Object
+                        && b.TryGetProperty("name", out var bn)) bank = bn.GetString();
+                }
+                if (!string.IsNullOrWhiteSpace(number))
+                {
+                    order.PayVirtualAccountNumber = number;
+                    order.PayVirtualAccountName = name;
+                    order.PayVirtualAccountBank = bank;
+                    order.Touch();
+                    await db.SaveChangesAsync(ct);
+                    var notifier = scope.ServiceProvider
+                        .GetRequiredService<InstaSafe.Application.Common.Notifications.OrderNotifier>();
+                    await notifier.BankTransferDetailsAsync(order);
+                }
+            }
+            else
+            {
+                _logger.LogWarning("Dedicated account setup failed for order {OrderId}", order.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Dedicated account webhook handling failed");
+        }
     }
 
     private static string TryGetEvent(string body)

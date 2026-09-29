@@ -5,6 +5,7 @@ using InstaSafe.Application.Features.Vendors.Commands.DeactivateVendor;
 using InstaSafe.Application.Features.Vendors.Commands.ReactivateVendor;
 using InstaSafe.Application.Features.Vendors.Commands.RegisterVendor;
 using InstaSafe.Application.Features.Vendors.Commands.UpdateVendorPayout;
+using InstaSafe.Application.Features.Vendors.Commands.UpdateVendorPhone;
 using InstaSafe.Application.Features.Vendors.Commands.UpdateVendorProfile;
 using InstaSafe.Application.Features.Vendors.DTOs;
 using InstaSafe.Application.Features.Vendors.Queries.GetVendorById;
@@ -34,7 +35,7 @@ public class VendorsController : ControllerBase
     {
         var result = await _mediator.Send(cmd, ct);
         if (!result.IsSuccess) return BadRequest(ApiResponse<VendorDto>.FromResult(result));
-        return Ok(ApiResponse<VendorDto>.FromResult(result, "Vendor registered."));
+        return Ok(ApiResponse<VendorDto>.FromResult(result, "Vendor registered. Check your email for the verification code, then verify to continue."));
     }
 
     [HttpGet("{id:guid}")]
@@ -74,6 +75,16 @@ public class VendorsController : ControllerBase
         var result = await _mediator.Send(new UpdateVendorProfileCommand(id, body.DisplayName), ct);
         if (!result.IsSuccess) return NotFound(ApiResponse<VendorDto>.FromResult(result));
         return Ok(ApiResponse<VendorDto>.FromResult(result, "Vendor updated."));
+    }
+
+    [HttpPut("{id:guid}/phone")]
+    public async Task<ActionResult<ApiResponse<VendorDto>>> UpdatePhone(
+        Guid id, [FromBody] UpdatePhoneRequest body, CancellationToken ct)
+    {
+        if (!Owns(id)) return Forbid();
+        var result = await _mediator.Send(new UpdateVendorPhoneCommand(id, body.Phone), ct);
+        if (!result.IsSuccess) return BadRequest(ApiResponse<VendorDto>.FromResult(result));
+        return Ok(ApiResponse<VendorDto>.FromResult(result, "Phone updated. Log in again to refresh your session."));
     }
 
     [HttpPut("{id:guid}/payout")]
@@ -116,5 +127,6 @@ public class VendorsController : ControllerBase
     }
 
     public sealed record UpdateProfileRequest(string DisplayName);
+    public sealed record UpdatePhoneRequest(string Phone);
     public sealed record UpdatePayoutRequest(string AccountNumber, string BankCode);
 }

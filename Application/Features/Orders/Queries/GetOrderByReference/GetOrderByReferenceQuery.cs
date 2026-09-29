@@ -4,4 +4,4 @@ using MediatR;
 
 namespace InstaSafe.Application.Features.Orders.Queries.GetOrderByReference;
 
-public sealed record GetOrderByReferenceQuery(string Reference) : IRequest<Result<OrderDto>>;
+public sealed record GetOrderByReferenceQuery(string Reference) : IRequest<Result<PublicOrderDto>>;

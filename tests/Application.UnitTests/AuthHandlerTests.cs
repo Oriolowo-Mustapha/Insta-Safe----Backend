@@ -18,6 +18,12 @@ public class AuthHandlerTests
             => Task.FromResult(Vendors.FirstOrDefault(v => v.Id == id));
         public Task<Vendor?> GetByPhoneAsync(string phone, CancellationToken ct)
             => Task.FromResult(Vendors.FirstOrDefault(v => v.Phone == phone));
+        public Task<Vendor?> GetByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Vendors.FirstOrDefault(v =>
+                v.Email != null && v.Email.Equals(email, StringComparison.OrdinalIgnoreCase)));
+        public Task<bool> ExistsByEmailAsync(string email, CancellationToken ct)
+            => Task.FromResult(Vendors.Any(v =>
+                v.Email != null && v.Email.Equals(email, StringComparison.OrdinalIgnoreCase)));
         public Task<bool> ExistsByPhoneAsync(string phone, CancellationToken ct)
             => Task.FromResult(Vendors.Any(v => v.Phone == phone));
         public Task AddAsync(Vendor vendor, CancellationToken ct)
@@ -54,6 +60,7 @@ public class AuthHandlerTests
     {
         public string CreateVendorToken(Guid vendorId, string phone) => $"TEST-TOKEN:{vendorId}";
         public string CreateDispatcherToken(Guid dispatcherId, string phone) => $"TEST-DRIVER-TOKEN:{dispatcherId}";
+        public string CreateAdminToken(string email) => $"TEST-ADMIN:{email}";
     }
 
     private sealed class FakeConfig : Microsoft.Extensions.Configuration.IConfiguration
@@ -88,7 +95,7 @@ public class AuthHandlerTests
     public async Task RequestCode_KnownVendor_StoresOtp_AndSendsWhatsApp()
     {
         var vendors = new FakeVendors();
-        vendors.Vendors.Add(new Vendor { Phone = "08012345678", DisplayName = "Ada" });
+        vendors.Vendors.Add(new Vendor { Phone = "2348012345678", DisplayName = "Ada" });
         var wa = new FakeWhatsApp();
         var handler = new RequestVendorOtpCommandHandler(
             vendors, new FakeOtp(), wa, new FakeConfig(),
@@ -107,7 +114,7 @@ public class AuthHandlerTests
     public async Task VerifyCode_CorrectCode_ReturnsToken_AndClearsOtp()
     {
         var vendors = new FakeVendors();
-        var vendor = new Vendor { Phone = "08012345678", DisplayName = "Ada" };
+        var vendor = new Vendor { Phone = "2348012345678", DisplayName = "Ada" };
         vendors.Vendors.Add(vendor);
         var otp = new FakeOtp();
         var request = new RequestVendorOtpCommandHandler(
@@ -129,7 +136,7 @@ public class AuthHandlerTests
     public async Task VerifyCode_WrongCode_IncrementsAttempts()
     {
         var vendors = new FakeVendors();
-        vendors.Vendors.Add(new Vendor { Phone = "08012345678", DisplayName = "Ada" });
+        vendors.Vendors.Add(new Vendor { Phone = "2348012345678", DisplayName = "Ada" });
         var otp = new FakeOtp();
         var request = new RequestVendorOtpCommandHandler(
             vendors, otp, new FakeWhatsApp(), new FakeConfig(),
@@ -148,7 +155,7 @@ public class AuthHandlerTests
     public async Task VerifyCode_WithoutRequest_Fails()
     {
         var vendors = new FakeVendors();
-        vendors.Vendors.Add(new Vendor { Phone = "08012345678", DisplayName = "Ada" });
+        vendors.Vendors.Add(new Vendor { Phone = "2348012345678", DisplayName = "Ada" });
         var verify = new VerifyVendorOtpCommandHandler(
             vendors, new FakeOtp(), new FakeTokens(), Mapper(), new FakeConfig());
 

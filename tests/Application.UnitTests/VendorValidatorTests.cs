@@ -7,31 +7,57 @@ namespace Application.UnitTests;
 
 public class VendorValidatorTests
 {
+    private static RegisterVendorCommand Full(string phone = "08012345678") =>
+        new(phone, "Ada Boutique", "Ada", "Obi", "ada@example.com", "s3cretPass!");
+
     [Theory]
-    [InlineData("", "Ada")]
-    [InlineData("08012345678", "")]
-    public void RegisterVendor_RejectsEmptyRequiredFields(string phone, string displayName)
-    {
-        var validator = new RegisterVendorCommandValidator();
-        var result = validator.Validate(new RegisterVendorCommand(phone, displayName));
-        Assert.False(result.IsValid);
-    }
-
-    [Fact]
-    public void RegisterVendor_AcceptsValidMinimalVendor()
-    {
-        var validator = new RegisterVendorCommandValidator();
-        var result = validator.Validate(new RegisterVendorCommand("08012345678", "Ada Boutique"));
-        Assert.True(result.IsValid);
-    }
-
-    [Fact]
-    public void RegisterVendor_BankPairRequiresBothParts()
+    [InlineData("", "Ada Boutique", "Ada", "Obi", "ada@example.com", "s3cretPass!")]
+    [InlineData("08012345678", "", "Ada", "Obi", "ada@example.com", "s3cretPass!")]
+    [InlineData("08012345678", "Ada Boutique", "", "Obi", "ada@example.com", "s3cretPass!")]
+    [InlineData("08012345678", "Ada Boutique", "Ada", "Obi", "not-an-email", "s3cretPass!")]
+    [InlineData("08012345678", "Ada Boutique", "Ada", "Obi", "ada@example.com", "short")]
+    public void RegisterVendor_RejectsBadSignup(
+        string phone, string displayName, string first, string last, string email, string password)
     {
         var validator = new RegisterVendorCommandValidator();
         var result = validator.Validate(new RegisterVendorCommand(
-            "08012345678", "Ada", AccountNumber: "0123456789", BankCode: null));
+            phone, displayName, first, last, email, password));
         Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void RegisterVendor_AcceptsValidSignup()
+    {
+        var validator = new RegisterVendorCommandValidator();
+        Assert.True(validator.Validate(Full()).IsValid);
+    }
+
+    [Fact]
+    public void RegisterVendor_RejectsBadEmailAndShortPassword()
+    {
+        var validator = new RegisterVendorCommandValidator();
+        Assert.False(validator.Validate(Full() with { Email = "not-an-email" }).IsValid);
+        Assert.False(validator.Validate(Full() with { Password = "short" }).IsValid);
+    }
+
+    [Theory]
+    [InlineData("0701602720")]
+    [InlineData("12345")]
+    [InlineData("+1 415 555 2671")]
+    public void RegisterVendor_RejectsNonNigerianPhone(string phone)
+    {
+        var validator = new RegisterVendorCommandValidator();
+        Assert.False(validator.Validate(Full(phone)).IsValid);
+    }
+
+    [Theory]
+    [InlineData("08031234567")]
+    [InlineData("+2348031234567")]
+    [InlineData("2348031234567")]
+    public void RegisterVendor_AcceptsNigerianFormats(string phone)
+    {
+        var validator = new RegisterVendorCommandValidator();
+        Assert.True(validator.Validate(Full(phone)).IsValid);
     }
 
     [Fact]
@@ -53,7 +79,10 @@ public class VendorValidatorTests
     [Theory]
     [InlineData("+234 801 234 5678", "2348012345678")]
     [InlineData("2348012345678@c.us", "2348012345678")]
-    [InlineData("0801-234-5678", "08012345678")]
+    [InlineData("0801-234-5678", "2348012345678")]
+    [InlineData("08031234567", "2348031234567")]
+    [InlineData("2348031234567", "2348031234567")]
+    [InlineData("+1 415 555 2671", "14155552671")]
     public void PhoneNormalizer_StripsFormattingAndJidSuffix(string raw, string expected)
     {
         Assert.Equal(expected, PhoneNormalizer.Normalize(raw));
