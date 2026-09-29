@@ -9,6 +9,7 @@ using InstaSafe.Domain.Enums;
 using InstaSafe.Domain.Events;
 using InstaSafe.Domain.Exceptions;
 using MediatR;
+using Microsoft.Extensions.Configuration;
 
 namespace InstaSafe.Application.Features.Orders.Commands.CreateOrder;
 
@@ -21,10 +22,12 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
     private readonly ISanitizer _sanitizer;
     private readonly OrderNotifier _notifier;
     private readonly IMapper _mapper;
+    private readonly string _frontendBaseUrl;
 
     public CreateOrderCommandHandler(
         IOrderRepository orders, IVendorRepository vendors, IDispatcherRepository drivers,
-        IPaystackClient paystack, ISanitizer sanitizer, OrderNotifier notifier, IMapper mapper)
+        IPaystackClient paystack, ISanitizer sanitizer, OrderNotifier notifier, IMapper mapper,
+        IConfiguration? config = null)
     {
         _orders = orders;
         _vendors = vendors;
@@ -33,6 +36,7 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
         _sanitizer = sanitizer;
         _notifier = notifier;
         _mapper = mapper;
+        _frontendBaseUrl = (config?["Frontend:BaseUrl"] ?? "").TrimEnd('/');
     }
 
     public async Task<Result<OrderDto>> Handle(CreateOrderCommand req, CancellationToken ct)
@@ -122,7 +126,15 @@ public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, Res
 
         await _orders.AddAsync(order, ct);
 
-        var (reference, authUrl) = await _paystack.InitializeTransactionAsync(req.BuyerEmail!, order.AmountKobo, order.Id, ct);        order.PaystackReference = reference;
+        // After payment Paystack redirects the buyer here. Per-order track URL
+        // when configured; null otherwise, which keeps Paystack's default
+        // success page. Unconfigured locally means no redirect - same as today.
+        var callbackUrl = string.IsNullOrWhiteSpace(_frontendBaseUrl) ||
+            string.IsNullOrWhiteSpace(order.OrderNumber)
+            ? null
+            : $"{_frontendBaseUrl}/track/{order.OrderNumber}";
+        var (reference, authUrl) = await _paystack.InitializeTransactionAsync(
+            req.BuyerEmail!, order.AmountKobo, order.Id, ct, callbackUrl);        order.PaystackReference = reference;
         order.PaystackAuthUrl = authUrl;
         order.Status = OrderStatus.AwaitingPayment;
         order.Touch();

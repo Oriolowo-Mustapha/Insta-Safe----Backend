@@ -406,7 +406,7 @@ Both dispatch endpoints return **`DispatchOrderDto`**, not `OrderDto` — see [O
 
 **Vendor onboarding:** register → verify-email → payout → login → dashboard. Gate on the two flags.
 **Sell:** create order, picking `fulfillment` → show buyer `paystackAuthUrl` → buyer pays → `Held` (buyer gets OTP) → **rider confirms** → `Delivered` (24h window) → auto-release or dispute → resolve. A self-delivery order instead goes `Held` → the buyer releases it from the track page with their own code.
-**Track page (public):** route `/track/{orderNumber}` → `by-reference/{orderNumber}` for header facts + `by-reference/{orderNumber}/timeline` for the stepper. **Dispute** always; the verify panel only for `Held` self-delivery orders. No satisfaction button. Also linked from the dispatcher's assignment WhatsApp.
+**Track page (public):** route `/track/{orderNumber}` → `by-reference/{orderNumber}` for header facts + `by-reference/{orderNumber}/timeline` for the stepper. **Dispute** always; the verify panel only for `Held` self-delivery orders. No satisfaction button. Also linked from the dispatcher's assignment WhatsApp. After a checkout payment Paystack redirects the buyer straight here (per-order callback_url); the order may still read AwaitingPayment for a few seconds until the webhook confirms - render that as confirming, not an error.
 **Driver app:** request-code → verify-code → assigned list → confirm with buyer OTP.
 
 ## 7. WhatsApp bot (for context, not frontend work)

@@ -29,7 +29,8 @@ public class RetryRiderPayoutTests : IDisposable
         public List<(long Amount, string Recipient)> Transfers { get; } = new();
         public string? TransferRef { get; set; } = "TRF_RIDER_NEW";
         public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
-            string email, long amountKobo, Guid orderId, CancellationToken ct)
+            string email, long amountKobo, Guid orderId, CancellationToken ct,
+            string? callbackUrl = null)
             => Task.FromResult(("ref", "https://pay.test"));
         public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct) => Task.FromResult(true);
         public Task<string?> CreateRecipientAsync(string accountNumber, string bankCode, string name, CancellationToken ct)

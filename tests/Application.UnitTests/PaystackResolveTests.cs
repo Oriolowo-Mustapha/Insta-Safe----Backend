@@ -112,6 +112,66 @@ public class PaystackResolveTests
         Assert.Empty(banks);
     }
 
+    [Fact]
+    public async Task InitializeTransaction_SendsCallbackUrl_WhenProvided()
+    {
+        var bodies = new List<string?>();
+        var handler = new CaptureHandler(bodies,
+            (HttpStatusCode.OK,
+             """{"status":true,"data":{"reference":"ref-1","authorization_url":"https://pay.test/x"}}"""));
+        var client = new PaystackClient(new HttpClient(handler),
+            new FakeConfig(), NullLogger<PaystackClient>.Instance);
+
+        var (reference, _) = await client.InitializeTransactionAsync(
+            "buyer@example.com", 5000000, Guid.NewGuid(), CancellationToken.None,
+            "https://app.test/track/IS-8K4N2Q");
+
+        Assert.Equal("ref-1", reference);
+        Assert.Single(bodies);
+        Assert.Contains("https://app.test/track/IS-8K4N2Q", bodies[0]);
+        Assert.Contains("callback_url", bodies[0]);
+    }
+
+    [Fact]
+    public async Task InitializeTransaction_OmitsCallbackUrl_WhenAbsent()
+    {
+        var bodies = new List<string?>();
+        var handler = new CaptureHandler(bodies,
+            (HttpStatusCode.OK,
+             """{"status":true,"data":{"reference":"ref-1","authorization_url":"https://pay.test/x"}}"""));
+        var client = new PaystackClient(new HttpClient(handler),
+            new FakeConfig(), NullLogger<PaystackClient>.Instance);
+
+        await client.InitializeTransactionAsync(
+            "buyer@example.com", 5000000, Guid.NewGuid(), CancellationToken.None);
+
+        Assert.Single(bodies);
+        Assert.Contains("\"callback_url\":null", bodies[0]);
+    }
+
+    private sealed class CaptureHandler : HttpMessageHandler
+    {
+        private readonly List<string?> _bodies;
+        private readonly Queue<(HttpStatusCode, string)> _responses;
+        public CaptureHandler(List<string?> bodies, params (HttpStatusCode, string)[] responses)
+        {
+            _bodies = bodies;
+            _responses = new Queue<(HttpStatusCode, string)>(responses);
+        }
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct)
+        {
+            _bodies.Add(request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(ct));
+            var (status, json) = _responses.Dequeue();
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+        }
+    }
+
     private sealed class QueueHandler : HttpMessageHandler
     {
         private readonly Queue<(HttpStatusCode, string)> _responses;

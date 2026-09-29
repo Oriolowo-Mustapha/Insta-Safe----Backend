@@ -44,7 +44,8 @@ public class RegisterVendorHandlerTests
     {
         public string? LastRecipientName { get; private set; }
         public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
-            string email, long amountKobo, Guid orderId, CancellationToken ct)
+            string email, long amountKobo, Guid orderId, CancellationToken ct,
+            string? callbackUrl = null)
             => Task.FromResult(("ref", "https://pay.test"));
         public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct)
             => Task.FromResult(true);

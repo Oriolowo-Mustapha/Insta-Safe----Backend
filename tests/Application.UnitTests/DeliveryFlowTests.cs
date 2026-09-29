@@ -52,7 +52,7 @@ public class DeliveryFlowTests : IDisposable
     {
         public List<(long Amount, string Recipient)> Transfers { get; } = new();
         public bool RefundSucceeds { get; set; } = true;
-        public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(string email, long amountKobo, Guid orderId, CancellationToken ct)
+        public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(string email, long amountKobo, Guid orderId, CancellationToken ct, string? callbackUrl = null)
             => Task.FromResult(("ref", "https://pay.test"));
         public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct) => Task.FromResult(true);
         public Task<string?> CreateRecipientAsync(string accountNumber, string bankCode, string name, CancellationToken ct)

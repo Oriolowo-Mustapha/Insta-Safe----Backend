@@ -34,9 +34,14 @@ public class PaystackClient : IPaystackClient
     }
 
     public async Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
-        string email, long amountKobo, Guid orderId, CancellationToken ct)
+        string email, long amountKobo, Guid orderId, CancellationToken ct,
+        string? callbackUrl = null)
     {
-        var body = new { email, amount = amountKobo, metadata = new { order_id = orderId }, callback_url = (string?)null };
+        // callback_url is where Paystack sends the buyer after payment. Null
+        // keeps Paystack's default success page; a track URL lands them on
+        // their live tracker (which may briefly show AwaitingPayment until the
+        // webhook confirms - the page already renders that state).
+        var body = new { email, amount = amountKobo, metadata = new { order_id = orderId }, callback_url = callbackUrl };
         var res = await _http.PostAsJsonAsync("/transaction/initialize", body, ct);
         res.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
