@@ -189,7 +189,8 @@ public class DeliveryFlowTests : IDisposable
         await _orders.AddAsync(order, CancellationToken.None);
         await _orders.SaveAsync(CancellationToken.None);
         var handler = new ConfirmDeliveryCommandHandler(
-            _orders, _db, _otp, _paystack, Notifier(), _mapper);
+            _orders, _db, _otp, _paystack, Notifier(), _mapper,
+            NullLogger<ConfirmDeliveryCommandHandler>.Instance);
 
         var result = await handler.Handle(
             new ConfirmDeliveryCommand(Guid.NewGuid(), "0803", order.Id, "123456"), CancellationToken.None);
@@ -211,7 +212,8 @@ public class DeliveryFlowTests : IDisposable
         await _orders.AddAsync(order, CancellationToken.None);
         await _orders.SaveAsync(CancellationToken.None);
         var handler = new ConfirmDeliveryCommandHandler(
-            _orders, _db, _otp, _paystack, Notifier(), _mapper);
+            _orders, _db, _otp, _paystack, Notifier(), _mapper,
+            NullLogger<ConfirmDeliveryCommandHandler>.Instance);
 
         var result = await handler.Handle(
             new ConfirmDeliveryCommand(Guid.NewGuid(), "08039999999", order.Id, "123456"), CancellationToken.None);

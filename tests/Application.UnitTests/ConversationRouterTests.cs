@@ -1129,6 +1129,50 @@ public class ConversationRouterTests
         Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
     }
 
+    private async Task WalkToDriverAccountStep(string phone)
+    {
+        await WalkToDriverPhoneStep(phone);
+        await Send(phone, "08055556666");
+        Assert.Equal(ConversationStep.DraftDriverAccount, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task DriverBank_OneMessage_AccountAndBank_ResolvesDirectly()
+    {
+        // The vendor sends both halves in one message instead of answering
+        // the two prompts separately. Holder name still comes back for
+        // confirmation - the shortcut skips questions, never the check.
+        const string phone = "08010000075";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverAccountStep(phone);
+
+        await Send(phone, "0123456789 GTBank");
+
+        Assert.Equal(ConversationStep.DraftDriverConfirm, State(phone).Step);
+        Assert.Contains("Musa Rider", _sender.LastBody);
+        Assert.Contains("Guaranty Trust Bank", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task DriverBank_WrongBank_ThenOneMessage_Recovers()
+    {
+        const string phone = "08010000076";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverAccountStep(phone);
+        await Send(phone, "0123456789");
+        Assert.Equal(ConversationStep.DraftDriverBankName, State(phone).Step);
+
+        await Send(phone, "Bank of Nowhere");
+        Assert.Equal(ConversationStep.DraftDriverBankName, State(phone).Step);
+
+        await Send(phone, "0123456789 GTBank");
+
+        Assert.Equal(ConversationStep.DraftDriverConfirm, State(phone).Step);
+        Assert.Contains("Musa Rider", _sender.LastBody);
+    }
+
     [Fact]
     public async Task Correction_Address_AtDriverStep_AppliesAndStays()
     {

@@ -10,6 +10,26 @@ Frontend origin (production): `https://instasafe-six.vercel.app`
 This section is rewritten each time the contract changes. It lists only what is
 current — older deltas are deleted, not appended to.
 
+### Rider fee failures are now loud + recoverable
+
+A delivery could complete while the rider fee transfer failed, and nothing
+recorded it. Now a failed fee writes an Error log plus a `RiderPayoutFailed`
+outbox entry (visible in `GET /api/admin/outbox` RecentErrors), and the admin
+can re-run it via `POST /api/admin/orders/{id}/retry-rider-payout` (no body).
+Returns `409` unless the order is `Delivered` with a fee, no rider transfer
+reference yet, and a rider recipient. Same unknown-outcome rule as
+`retry-payout`: on "outcome is unknown", check the Paystack transfers list
+for `InstaSafe rider fee {orderId}` before retrying.
+
+### Web order creation now requires rider-bank verification
+
+A rider order must carry `riderBankCheck`: `verified:{bankCode}:{account}`
+(holder name confirmed via `GET /api/payments/banks/resolve`) or
+`acknowledged:{bankCode}:{account}` (verification down, vendor took
+responsibility) - matching the submitted values exactly, otherwise `400`.
+The create form resolves the holder name and shows it for confirmation
+before submit.
+
 ### ⚠️ BREAKING: two fulfilment types, and the vendor now picks
 
 `fulfillment` is a **number** and the vendor states which flow they are in:
@@ -391,7 +411,7 @@ Both dispatch endpoints return **`DispatchOrderDto`**, not `OrderDto` — see [O
 
 ## 7. WhatsApp bot (for context, not frontend work)
 **Vendor-only.** The bot answers verified + onboarded vendors and no one else: unknown/unverified/deactivated/unfinished-onboarding senders get **silence** (logged to the audit trail, never replied to). Buyers are served purely through notifications (payment link, OTP, delivered, released, refunded) + the public track page — a buyer replying to the bot gets no answer by design. (If a vendor changes SIM, fix via `PUT /api/vendors/{id}/phone` on web.)
-Menu: create link (guided: customer → phone → buyer email → address → items → amount → **how it reaches the buyer (1 dispatch rider / 2 self-delivery)** → fee → driver phone/account/**bank name** → holder confirm → order confirm; the self-delivery path skips every driver question), `2. Track an order` (paste the reference, or reply LIST for a numbered list of your orders and pick one), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), help. `BACK`/`EDIT` steps back to the previous answered question; `MENU`/`CANCEL` preserve the draft as a ticket. If an answer fails validation the bot first checks whether you were correcting an earlier answer (e.g. fixing the address while being asked for the rider's number) and applies it; otherwise it re-asks. Phone answers must actually be digits — sentences are rejected, not stored. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
+Menu: create link (guided: customer → phone → buyer email → address → items → amount → **how it reaches the buyer (1 dispatch rider / 2 self-delivery)** → fee → driver phone/account/**bank name** → holder confirm → order confirm; the self-delivery path skips every driver question; account and bank may arrive in one message ("0123456789 GTBank")), `2. Track an order` (paste the reference, or reply LIST for a numbered list of your orders and pick one), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), help. `BACK`/`EDIT` steps back to the previous answered question; `MENU`/`CANCEL` preserve the draft as a ticket. If an answer fails validation the bot first checks whether you were correcting an earlier answer (e.g. fixing the address while being asked for the rider's number) and applies it; otherwise it re-asks. Phone answers must actually be digits — sentences are rejected, not stored. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
 
 ---
 

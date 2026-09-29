@@ -623,9 +623,57 @@ public class ConversationRouter
                 state.Step, ct);
             return;
         }
+
+        // One-message shortcut: "0123456789 GTBank" carries both halves.
+        // If the remainder names a real bank, skip the bank question entirely.
+        if (TrySplitAccountAndBank(text, out _, out var bankText) && bankText.Length > 0)
+        {
+            var both = await MatchBankAsync(bankText, ct);
+            if (both is not null)
+            {
+                draft = draft with { DriverAccountNumber = _sanitizer.Clean(digits, 20) };
+                await ResolveAndConfirmDriverBankAsync(state, phone, replyTo, draft, both, ct);
+                return;
+            }
+        }
+
         draft = draft with { DriverAccountNumber = _sanitizer.Clean(digits, 20) };
         await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverBankName,
             Domain.Entities.ConversationStep.DraftDriverBankName, ct, draft);
+    }
+
+    /// <summary>
+    /// Splits a combined "account + bank" message ("0123456789 GTBank") into
+    /// its halves. Returns false unless there are 10+ digits AND leftover
+    /// bank text - otherwise the normal single-field path handles it.
+    /// </summary>
+    private static bool TrySplitAccountAndBank(string text, out string account, out string bankText)
+    {
+        account = new string((text ?? "").Where(char.IsDigit).ToArray());
+        bankText = new string((text ?? "").Where(c => !char.IsDigit(c)).ToArray());
+        bankText = System.Text.RegularExpressions.Regex.Replace(bankText, @"\s+", " ").Trim(
+            ' ', '-', '(', ')', '.', ',');
+        if (account.Length < 10 || bankText.Length < 2)
+        {
+            account = "";
+            bankText = "";
+            return false;
+        }
+        return true;
+    }
+
+    private async Task<BankInfo?> MatchBankAsync(string text, CancellationToken ct)
+    {
+        try
+        {
+            var banks = await _banks.GetBanksAsync(ct);
+            return BankDirectory.Match(text, banks);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Bank match failed");
+            return null;
+        }
     }
 
     private async Task HandleBuyerEmailStepAsync(
@@ -649,16 +697,15 @@ public class ConversationRouter
     private async Task HandleDriverBankNameStepAsync(
         Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
     {
-        BankInfo? bank;
-        try
+        var bank = await MatchBankAsync(text, ct);
+
+        // The vendor may have resent both halves in one message
+        // ("0123456789 GTBank") after a failed verification - take them.
+        if (bank is null && TrySplitAccountAndBank(text, out var acct, out var bankText))
         {
-            var banks = await _banks.GetBanksAsync(ct);
-            bank = BankDirectory.Match(text, banks);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Bank match failed");
-            bank = null;
+            bank = await MatchBankAsync(bankText, ct);
+            if (bank is not null)
+                draft = draft with { DriverAccountNumber = _sanitizer.Clean(acct, 20) };
         }
 
         if (bank is null)
@@ -672,6 +719,18 @@ public class ConversationRouter
             return;
         }
 
+        await ResolveAndConfirmDriverBankAsync(state, phone, replyTo, draft, bank, ct);
+    }
+
+    /// <summary>
+    /// Verifies the draft's account number against the bank and shows the
+    /// holder name for confirmation. Shared by the guided bank step and the
+    /// one-message account+bank shortcut so both get the identical check.
+    /// </summary>
+    private async Task ResolveAndConfirmDriverBankAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo,
+        OrderDraft draft, BankInfo bank, CancellationToken ct)
+    {
         InstaSafe.Application.Common.Interfaces.AccountResolveResult resolved;
         try
         {
@@ -708,7 +767,7 @@ public class ConversationRouter
             }
             await ReplyAndSaveAsync(state, phone, replyTo,
                 $"I couldn't verify account {draft.DriverAccountNumber} at {bank.Name}. " +
-                "Please resend the driver account number, or CANCEL to stop.",
+                "Resend the account number, or send account and bank together (e.g. 0123456789 GTBank), or CANCEL to stop.",
                 Domain.Entities.ConversationStep.DraftDriverAccount, ct,
                 draft with { DriverBankCode = "", DriverBankName = "" });
             return;
