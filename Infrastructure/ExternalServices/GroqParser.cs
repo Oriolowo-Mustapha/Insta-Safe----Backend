@@ -134,6 +134,78 @@ public class GroqParser : IGroqParser
         }
     }
 
+    public async Task<CorrectionInterpretation> InterpretCorrectionAsync(
+        string rawText, string currentQuestion, string filledSummary, CancellationToken ct)
+    {
+        const string schemaHint = """{"is_correction":true,"field":"customer_name|customer_phone|buyer_email|address|amount|delivery_fee|driver_phone|driver_account|none","value":"string or empty"}""";
+        var body = new
+        {
+            model = _opts.Model,
+            response_format = new { type = "json_object" },
+            messages = new object[]
+            {
+                new { role = "system", content =
+                    "You help a Nigerian vendor build an escrow order over WhatsApp. " +
+                    "The vendor is currently being asked: '" + currentQuestion + "'. " +
+                    "Answers collected so far: " + filledSummary + ". " +
+                    "The vendor just replied with a message. Decide ONLY this: is the reply " +
+                    "correcting something given earlier (is_correction=true), or is it answering " +
+                    "the current question / chitchat / anything else (is_correction=false)? " +
+                    "Reply with JSON only, matching " + schemaHint + ". " +
+                    "Rules: field must be one of customer_name, customer_phone, buyer_email, " +
+                    "address, amount, delivery_fee, driver_phone, driver_account, or none. " +
+                    "value is the corrected value exactly as stated - just the value, no commentary. " +
+                    "NEVER invent a value; if the reply names a field but gives no usable value, " +
+                    "is_correction=false. Bank names, greetings, thanks, questions, and answers " +
+                    "to the current question are NEVER corrections. " +
+                    "Examples: 'the address is actually 14 Allen Avenue Ikeja' while asked for a " +
+                    "phone number -> {\"is_correction\":true,\"field\":\"address\",\"value\":\"14 Allen Avenue Ikeja\"}. " +
+                    "'sorry I meant chidi@gmail.com' -> {\"is_correction\":true,\"field\":\"buyer_email\",\"value\":\"chidi@gmail.com\"}. " +
+                    "'08031234567' when asked for a phone -> is_correction=false. " +
+                    "'how far'/'thanks' -> is_correction=false." },
+                new { role = "user", content = rawText }
+            },
+            temperature = 0
+        };
+        CorrectionInterpretation fallback() => new(false, null, null);
+        HttpResponseMessage res;
+        try
+        {
+            res = await _http.PostAsJsonAsync("chat/completions", body, ct);
+        }
+        catch
+        {
+            return fallback();
+        }
+        if (!res.IsSuccessStatusCode) return fallback();
+        try
+        {
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+            var content = doc.RootElement.GetProperty("choices")[0]
+                .GetProperty("message").GetProperty("content").GetString() ?? "";
+            using var parsed = JsonDocument.Parse(content);
+            var r = parsed.RootElement;
+            var isCorrection = r.TryGetProperty("is_correction", out var ic)
+                && ic.ValueKind == JsonValueKind.True;
+            var field = r.TryGetProperty("field", out var f) ? f.GetString() : null;
+            var value = r.TryGetProperty("value", out var v) ? v.GetString() : null;
+            if (!isCorrection) return fallback();
+            field = (field ?? "").Trim().ToLowerInvariant();
+            var allowed = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "customer_name", "customer_phone", "buyer_email", "address",
+                "amount", "delivery_fee", "driver_phone", "driver_account"
+            };
+            if (!allowed.Contains(field) || string.IsNullOrWhiteSpace(value))
+                return fallback();
+            return new CorrectionInterpretation(true, field, value.Trim());
+        }
+        catch
+        {
+            return fallback();
+        }
+    }
+
     public async Task<string> ChatReplyAsync(string rawText, CancellationToken ct)
     {
         var body = new

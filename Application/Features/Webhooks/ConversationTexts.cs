@@ -63,7 +63,10 @@ public static class ConversationTexts
         $"Bank: {bankName}\nAccount: {accountNumber}\nName: {holderName}\n" +
         "Reply YES if this is correct, or CANCEL to stop.";
 
-    public const string AskTrackRef = "Please send your order reference (from your payment link or receipt). Type MENU to go back.";
+    public const string AskTrackRef =
+        "Please send your order reference (from your payment link or receipt).\n" +
+        "Don't have it? Reply LIST and I'll show your recent orders.\n" +
+        "Type MENU to go back.";
 
     public const string Help =
         "InstaSafe help 💬\n" +

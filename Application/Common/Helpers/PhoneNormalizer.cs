@@ -16,4 +16,18 @@ public static class PhoneNormalizer
             s = "234" + s[1..];
         return s;
     }
+
+    /// <summary>
+    /// Input scrutiny for phone answers. Normalize only strips formatting, so
+    /// length alone accepts any prose ("the customer phone is abc" normalizes
+    /// to 22 chars). A phone answer must actually be digits of a plausible
+    /// length. Nigerian mobiles are 10-13 digits; 7-15 stays lenient for
+    /// short codes and international formats while blocking sentences.
+    /// </summary>
+    public static bool LooksLikePhone(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var s = Normalize(raw);
+        return s.Length >= 7 && s.Length <= 15 && s.All(char.IsDigit);
+    }
 }

@@ -103,6 +103,11 @@ public class ConversationRouterTests
             => Task.FromResult(NextParsed);
         public Task<string> ChatReplyAsync(string rawText, CancellationToken ct)
             => FailChatReply ? throw new HttpRequestException("groq down") : Task.FromResult(NextChatReply);
+        public CorrectionInterpretation NextCorrection { get; set; } = new(false, null, null);
+        public bool FailCorrection { get; set; }
+        public Task<CorrectionInterpretation> InterpretCorrectionAsync(
+            string rawText, string currentQuestion, string filledSummary, CancellationToken ct)
+            => FailCorrection ? throw new HttpRequestException("groq down") : Task.FromResult(NextCorrection);
     }
 
     private sealed class FakeSender : IWhatsAppSender
@@ -659,7 +664,66 @@ public class ConversationRouterTests
         Assert.Contains("IS-111111", _sender.LastBody);
         Assert.Contains("IS-222222", _sender.LastBody);
         Assert.DoesNotContain("IS-999999", _sender.LastBody);
-        Assert.Equal(ConversationStep.AwaitingTrackRef, State(phone).Step);
+        Assert.Contains("A — IS-111111", _sender.LastBody);
+        Assert.Contains("B — IS-222222", _sender.LastBody);
+        Assert.Contains("Reply with the number", _sender.LastBody);
+        Assert.Equal(ConversationStep.AwaitingOrderPick, State(phone).Step);
+
+        await Send(phone, "2");
+
+        Assert.Contains("IS-222222", _sender.LastBody);
+        Assert.Contains("AwaitingPayment", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task TrackStep_ListKeyword_ShowsPickableOrders()
+    {
+        const string phone = "08010000064";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-444444", VendorPhone = norm, CustomerName = "Ada",
+            CustomerPhone = "0806", DeliveryAddress = "V", AmountKobo = 750000,
+            Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "LIST");
+
+        Assert.Contains("Ada — IS-444444", _sender.LastBody);
+        Assert.Contains("₦7,500", _sender.LastBody);
+        Assert.Equal(ConversationStep.AwaitingOrderPick, State(phone).Step);
+
+        await Send(phone, "1");
+
+        Assert.Contains("IS-444444", _sender.LastBody);
+        Assert.Contains("Held", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task TrackStep_PickOutOfRange_Reprompts()
+    {
+        const string phone = "08010000065";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-555555", VendorPhone = norm, CustomerName = "E",
+            CustomerPhone = "0807", DeliveryAddress = "U", AmountKobo = 90000,
+            Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+        await Send(phone, "LIST");
+
+        await Send(phone, "9");
+
+        Assert.Contains("only listed 1", _sender.LastBody);
+        Assert.Equal(ConversationStep.AwaitingOrderPick, State(phone).Step);
     }
 
     [Fact]
@@ -957,6 +1021,104 @@ public class ConversationRouterTests
         Assert.Equal(ConversationStep.DraftBuyerEmail, State(phone).Step);
         await Send(phone, "chidi@example.com");
         Assert.Equal(ConversationStep.DraftAddress, State(phone).Step);
+    }
+
+    private async Task WalkToDriverPhoneStep(string phone)
+    {
+        await WalkToAddressStep(phone);
+        await Send(phone, "14 Broad Street, Lagos Island");
+        await Send(phone, "2x Sneakers @22500");
+        await Send(phone, "50000");
+        await Send(phone, "1");
+        await Send(phone, "5000");
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Correction_Address_AtDriverStep_AppliesAndStays()
+    {
+        // The scenario from the field: mid-flow at the rider's number, the
+        // vendor realises the address was wrong. The bot must fix the address,
+        // not complain about the phone number.
+        const string phone = "08010000070";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverPhoneStep(phone);
+        _parser.NextCorrection = new CorrectionInterpretation(
+            true, "address", "14 Allen Avenue, Ikeja");
+
+        await Send(phone, "sorry the address is actually 14 Allen Avenue Ikeja");
+
+        Assert.Contains("delivery address updated", _sender.Sent[^2].Body);
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+        var draft = OrderDraft.Load(State(phone).DraftJson);
+        Assert.Equal("14 Allen Avenue, Ikeja", draft.Address);
+    }
+
+    [Fact]
+    public async Task Correction_InvalidValue_ShowsOriginalError()
+    {
+        // The LLM proposes, the validator disposes: a bad phone number is
+        // still rejected even when framed as a correction.
+        const string phone = "08010000071";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverPhoneStep(phone);
+        _parser.NextCorrection = new CorrectionInterpretation(
+            true, "customer_phone", "abc");
+
+        await Send(phone, "the customer phone is abc");
+
+        Assert.Contains("doesn't look like a phone number", _sender.LastBody);
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Correction_LlmDown_ShowsOriginalError()
+    {
+        const string phone = "08010000072";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverPhoneStep(phone);
+        _parser.FailCorrection = true;
+
+        await Send(phone, "the address is actually somewhere else honestly");
+
+        Assert.Contains("doesn't look like a phone number", _sender.LastBody);
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Correction_NotACorrection_ShowsOriginalError()
+    {
+        const string phone = "08010000073";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverPhoneStep(phone);
+        _parser.NextCorrection = new CorrectionInterpretation(false, null, null);
+
+        await Send(phone, "how far");
+
+        Assert.Contains("doesn't look like a phone number", _sender.LastBody);
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task Correction_UnknownField_StaysOnGuidedPath()
+    {
+        // driver_bank needs a live verification call, so it is outside the
+        // closed set. The bot must not apply it from a proposal.
+        const string phone = "08010000074";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverPhoneStep(phone);
+        _parser.NextCorrection = new CorrectionInterpretation(
+            true, "driver_bank", "GTBank");
+
+        await Send(phone, "actually use GTBank");
+
+        Assert.Contains("doesn't look like a phone number", _sender.LastBody);
+        Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
     }
 
     [Fact]

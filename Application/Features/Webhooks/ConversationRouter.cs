@@ -105,8 +105,11 @@ public class ConversationRouter
                 break;
             case Domain.Entities.ConversationStep.DraftCustomerPhone:
                 var custPhone = PhoneNormalizer.Normalize(text);
-                if (custPhone.Length < 7)
+                if (!PhoneNormalizer.LooksLikePhone(text))
                 {
+                    if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                        "the customer's phone number", ct))
+                        break;
                     await ReplyAndSaveAsync(state, phone, replyTo,
                         "That doesn't look like a phone number. Please send the customer's phone number (e.g. 08012345678).",
                         state.Step, ct);
@@ -151,6 +154,9 @@ public class ConversationRouter
                 break;
             case Domain.Entities.ConversationStep.AwaitingTrackRef:
                 await HandleTrackStepAsync(state, phone, replyTo, text, ct);
+                break;
+            case Domain.Entities.ConversationStep.AwaitingOrderPick:
+                await HandleOrderPickStepAsync(state, phone, replyTo, text, ct);
                 break;
         }
 
@@ -265,12 +271,13 @@ public class ConversationRouter
         {
             var num = !string.IsNullOrWhiteSpace(o.OrderNumber) ? o.OrderNumber
                 : o.PaystackReference ?? o.Id.ToString();
-            return $"{i + 1}. {num} — {o.Status} — ₦{o.AmountKobo / 100:N0}";
+            var who = string.IsNullOrWhiteSpace(o.CustomerName) ? "Unnamed" : o.CustomerName;
+            return $"{i + 1}. {who} — {num} — {o.Status} — ₦{o.AmountKobo / 100:N0}";
         });
         await ReplyAndSaveAsync(state, phone, replyTo,
             "Your recent orders:\n" + string.Join("\n", lines) +
-            "\nSend a reference for details.",
-            state.Step, ct);
+            "\nReply with the number for full details, or paste a reference.",
+            Domain.Entities.ConversationStep.AwaitingOrderPick, ct);
     }
 
     private async Task ReplyChitchatAsync(
@@ -450,6 +457,9 @@ public class ConversationRouter
 
         if (parsed.Items.Count == 0)
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the order items", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "I couldn't pick out any items. Try e.g:\n2x Sneakers @22500",
                 state.Step, ct);
@@ -485,6 +495,9 @@ public class ConversationRouter
         }
         else
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the total amount in naira", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "I need a number for the total, e.g. 50000.",
                 state.Step, ct);
@@ -527,6 +540,9 @@ public class ConversationRouter
                 Domain.Entities.ConversationStep.DraftDeliveryFee, ct, draft);
             return;
         }
+        if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+            "how the order reaches the buyer (1 dispatch rider, 2 self-delivery)", ct))
+            return;
         await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskFulfillment,
             state.Step, ct);
     }
@@ -537,6 +553,9 @@ public class ConversationRouter
         var digits = new string(text.Where(char.IsDigit).ToArray());
         if (!long.TryParse(string.IsNullOrEmpty(digits) ? "0" : digits, out var fee) || fee < 0)
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the delivery fee in naira", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "Send the delivery fee as a number, e.g. 5000 — or 0 for none.",
                 state.Step, ct);
@@ -558,13 +577,28 @@ public class ConversationRouter
         var upper = text.ToUpperInvariant();
         if (upper is "SKIP" or "NONE" or "0")
         {
-            draft = draft with { DeliveryFeeNgn = 0, DriverPhone = "", DriverAccountNumber = "", DriverBankCode = "", DriverBankName = "", DriverHolderName = "" };
+            // No rider after all: this is a self-delivery, not a dispatch with
+            // missing details (which the API would reject). Fee is the rider's
+            // payout, so it goes to 0 with the rider fields.
+            draft = draft with
+            {
+                Fulfillment = Domain.Enums.FulfillmentType.SelfDelivery,
+                DeliveryFeeNgn = 0,
+                DriverPhone = "",
+                DriverAccountNumber = "",
+                DriverBankCode = "",
+                DriverBankName = "",
+                DriverHolderName = ""
+            };
             await AdvanceAsync(state, phone, replyTo, draft, ct);
             return;
         }
         var driverPhone = PhoneNormalizer.Normalize(text);
-        if (driverPhone.Length < 7)
+        if (!PhoneNormalizer.LooksLikePhone(text))
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the rider's phone number", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "That doesn't look like a phone number. Send the driver's number or SKIP.",
                 state.Step, ct);
@@ -581,6 +615,9 @@ public class ConversationRouter
         var digits = new string(text.Where(char.IsDigit).ToArray());
         if (digits.Length < 10)
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the rider's account number", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "Account number should be at least 10 digits. Please resend it.",
                 state.Step, ct);
@@ -597,6 +634,9 @@ public class ConversationRouter
         var email = text.Trim().ToLowerInvariant();
         if (!EmailChecker.IsPlausible(email))
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the buyer's email address", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "That doesn't look like an email address. Please send the buyer's email (e.g. chidi@example.com).",
                 state.Step, ct);
@@ -623,6 +663,9 @@ public class ConversationRouter
 
         if (bank is null)
         {
+            if (await TryCorrectAndContinueAsync(state, phone, replyTo, draft, text,
+                "the rider's bank name", ct))
+                return;
             await ReplyAndSaveAsync(state, phone, replyTo,
                 "I couldn't find that bank. Send the full bank name (e.g. Guaranty Trust Bank) or its 3-digit code.",
                 state.Step, ct);
@@ -843,12 +886,19 @@ public class ConversationRouter
     }
 
     /// <summary>
-    /// Track step: a real reference tracks immediately (no AI cost);
-    /// anything else is understood first (list my orders, chitchat, …).
+    /// Track step: a real reference tracks immediately (no AI cost); LIST
+    /// shows the vendor's recent orders for picking; anything else is
+    /// understood first (list my orders, chitchat, …).
     /// </summary>
     private async Task HandleTrackStepAsync(
         Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
     {
+        if (text.Trim().Equals("LIST", StringComparison.OrdinalIgnoreCase))
+        {
+            await ReplyOwnOrdersAsync(state, phone, replyTo, ct);
+            return;
+        }
+
         var order = await FindOrderAsync(text.Trim(), ct);
         if (order is not null)
         {
@@ -866,7 +916,36 @@ public class ConversationRouter
             _logger.LogWarning(ex, "Track-step classification failed");
             intent = new ChatIntent(ChatIntentKind.Unknown, null, null);
         }
+        if (intent.Kind == ChatIntentKind.ListOrders)
+        {
+            await ReplyOwnOrdersAsync(state, phone, replyTo, ct);
+            return;
+        }
         await HandleIntentAsync(state, phone, replyTo, intent, text, ct);
+    }
+
+    /// <summary>
+    /// The vendor was shown a numbered list of their orders and replies with a
+    /// number to see full details. Anything else falls back to reference
+    /// lookup so a pasted code still works here.
+    /// </summary>
+    private async Task HandleOrderPickStepAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string text, CancellationToken ct)
+    {
+        if (int.TryParse(text.Trim(), out var n) && n >= 1)
+        {
+            var orders = await _orders.ListByVendorAsync(Guid.Empty, phone, 1, 5, ct);
+            if (n <= orders.Count)
+            {
+                await SendTrackFoundAsync(state, phone, replyTo, orders[n - 1], ct);
+                return;
+            }
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                $"I only listed {orders.Count}. Reply with a number from the list, paste a reference, or type MENU.",
+                state.Step, ct);
+            return;
+        }
+        await HandleTrackStepAsync(state, phone, replyTo, text, ct);
     }
 
     private async Task<Domain.Entities.Order?> FindOrderAsync(string reference, CancellationToken ct)
@@ -1164,6 +1243,84 @@ public class ConversationRouter
         }
         var next = FirstMissingStep(draft);
         await ReplyAndSaveAsync(state, phone, replyTo, PromptFor(next), next, ct, draft);
+    }
+
+    /// <summary>
+    /// Second-chance interpretation for input that failed a draft step's
+    /// validation. Asks the LLM whether the vendor is correcting an earlier
+    /// answer; if so the proposed value goes through the SAME per-field rules
+    /// the step handlers enforce before it touches the draft. The LLM only
+    /// proposes - it can never bypass scrutiny, need a live call, or invent a
+    /// field outside the closed set. Anything unusable (or any failure) comes
+    /// back false so the caller shows the original error. On success the bot
+    /// acknowledges and continues from wherever the draft now stands.
+    /// </summary>
+    private async Task<bool> TryCorrectAndContinueAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo,
+        OrderDraft draft, string rawText, string currentQuestion, CancellationToken ct)
+    {
+        CorrectionInterpretation interp;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(15));
+            interp = await _parser.InterpretCorrectionAsync(
+                rawText, currentQuestion, DraftSummary(draft), cts.Token);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Correction interpretation failed");
+            return false;
+        }
+        if (!interp.IsCorrection || string.IsNullOrWhiteSpace(interp.Field) || interp.Value is null)
+            return false;
+
+        var value = interp.Value.Trim();
+        (OrderDraft fixed_, string label)? applied = interp.Field.Trim().ToLowerInvariant() switch
+        {
+            "customer_name" when value.Length > 0 && value.Length <= 120
+                => (draft with { CustomerName = _sanitizer.Clean(value, 120) }, "customer name"),
+            "customer_phone" when PhoneNormalizer.LooksLikePhone(value)
+                => (draft with { CustomerPhone = _sanitizer.Clean(PhoneNormalizer.Normalize(value), 20) }, "customer phone"),
+            "buyer_email" when EmailChecker.IsPlausible(value.Trim().ToLowerInvariant())
+                => (draft with { BuyerEmail = _sanitizer.Clean(value.Trim().ToLowerInvariant(), 200) }, "buyer email"),
+            "address" when value.Length > 0
+                => (draft with { Address = _sanitizer.Clean(value, 500) }, "delivery address"),
+            "amount" when long.TryParse(new string(value.Where(char.IsDigit).ToArray()), out var amount) && amount > 0
+                => (draft with { TotalNgn = amount }, "total amount"),
+            "delivery_fee" when long.TryParse(new string(value.Where(char.IsDigit).ToArray()) is { Length: > 0 } d ? d : "0", out var fee) && fee >= 0
+                => (draft with { DeliveryFeeNgn = fee }, "delivery fee"),
+            "driver_phone" when PhoneNormalizer.LooksLikePhone(value)
+                => (draft with { DriverPhone = _sanitizer.Clean(PhoneNormalizer.Normalize(value), 20) }, "rider phone"),
+            "driver_account" when new string(value.Where(char.IsDigit).ToArray()).Length >= 10
+                => (draft with { DriverAccountNumber = _sanitizer.Clean(new string(value.Where(char.IsDigit).ToArray()), 20) }, "rider account"),
+            _ => ((OrderDraft, string)?)null
+        };
+        if (applied is null) return false;
+
+        await SendWithTimeoutAsync(replyTo, $"Got it — {applied.Value.label} updated. ✅");
+        await AdvanceAsync(state, phone, replyTo, applied.Value.fixed_, ct);
+        return true;
+    }
+
+    private static string DraftSummary(OrderDraft draft)
+    {
+        static string Show(string label, string v) =>
+            $"{label}: {(string.IsNullOrWhiteSpace(v) ? "MISSING" : v)}";
+        return string.Join("; ", new[]
+        {
+            Show("customer name", draft.CustomerName),
+            Show("customer phone", draft.CustomerPhone),
+            Show("buyer email", draft.BuyerEmail),
+            Show("delivery address", draft.Address),
+            $"items: {(draft.Items.Count == 0 ? "MISSING" : $"{draft.Items.Count} item(s)")}",
+            $"total: {(draft.TotalNgn <= 0 ? "MISSING" : $"₦{draft.TotalNgn:N0}")}",
+            $"fulfilment: {draft.Fulfillment?.ToString() ?? "MISSING"}",
+            $"delivery fee: ₦{draft.DeliveryFeeNgn:N0}",
+            Show("rider phone", draft.DriverPhone),
+            Show("rider account", draft.DriverAccountNumber),
+            Show("rider bank", draft.DriverBankName),
+        });
     }
 
     private static string PromptFor(Domain.Entities.ConversationStep step) => step switch
