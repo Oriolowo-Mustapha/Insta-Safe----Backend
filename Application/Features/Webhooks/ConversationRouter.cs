@@ -23,17 +23,31 @@ public class ConversationRouter
     private readonly BankDirectory _banks;
     private readonly IPaystackClient _paystack;
     private readonly ILogger<ConversationRouter> _logger;
+    private readonly string _frontendBaseUrl;
+
+    /// <summary>
+    /// Gate-reply throttle: one guiding reply per sender per window. Verified
+    /// vendors never meet it (they are past the gate); it exists only so an
+    /// autoresponder loop or a spammer cannot turn the open gate into a
+    /// reply storm. Excess inbound is still audit-logged upstream and 2xx'd.
+    /// Static so it holds across scoped router instances; single-instance
+    /// noted, acceptable at this volume.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _lastGateReplyAt = new();
+    private static readonly TimeSpan GateReplyThrottle = TimeSpan.FromMinutes(10);
 
     public ConversationRouter(
         IConversationRepository states, IVendorRepository vendors, IOrderRepository orders,
         IGroqParser parser, IWhatsAppSender sender, IMediator mediator,
         ISanitizer sanitizer, BankDirectory banks,
-        IPaystackClient paystack, ILogger<ConversationRouter> logger)
+        IPaystackClient paystack, ILogger<ConversationRouter> logger,
+        Microsoft.Extensions.Configuration.IConfiguration? config = null)
     {
         _states = states; _vendors = vendors; _orders = orders;
         _parser = parser; _sender = sender; _mediator = mediator;
         _sanitizer = sanitizer; _banks = banks;
         _paystack = paystack; _logger = logger;
+        _frontendBaseUrl = (config?["Frontend:BaseUrl"] ?? "").TrimEnd('/');
     }
 
     public async Task<bool> RouteAsync(string rawPhone, string body, string? replyJid, CancellationToken ct)
@@ -43,12 +57,22 @@ public class ConversationRouter
         var text = (body ?? "").Trim();
         if (string.IsNullOrEmpty(text)) return false;
 
-        // Bot access gate: verified + onboarded vendors only.
-        // Everyone else (buyers replying, strangers, deactivated) gets
-        // SILENCE: inbound is audit-logged upstream, OpenWA gets its 2xx,
-        // and no state is created. Buyers are served via notifications only.
-        if (!await IsBotUserAsync(phone, ct))
+        // Bot access gate: verified + active + onboarded vendors pass. Everyone
+        // else gets a guiding reply instead of silence - but no state, no menu,
+        // no capabilities. Throttled per sender so the open gate cannot become
+        // a reply storm; excess inbound is audit-logged upstream as before.
+        var gate = await GetGateStatusAsync(phone, ct);
+        if (gate != GateStatus.Allowed)
+        {
+            if (ShouldSendGateReply(phone, DateTimeOffset.UtcNow))
+            {
+                var origin = string.IsNullOrWhiteSpace(_frontendBaseUrl)
+                    ? "https://instasafe-six.vercel.app"
+                    : _frontendBaseUrl;
+                await SendWithTimeoutAsync(replyTo, ConversationTexts.GateMessage(gate, origin));
+            }
             return true;
+        }
 
         var state = await _states.GetByPhoneAsync(phone, ct);
         if (state is null)
@@ -1104,13 +1128,28 @@ public class ConversationRouter
     /// Bot access gate. Vendors (verified + onboarded + active) may chat;
     /// everyone else is served through one-way notifications only.
     /// </summary>
-    private async Task<bool> IsBotUserAsync(string phone, CancellationToken ct)
+    private async Task<GateStatus> GetGateStatusAsync(string phone, CancellationToken ct)
     {
         var vendor = await _vendors.GetByPhoneAsync(phone, ct);
-        return vendor is not null
-            && vendor.EmailVerified
-            && vendor.IsActive
-            && vendor.OnboardingCompleted;
+        if (vendor is null) return GateStatus.Unknown;
+        if (!vendor.IsActive) return GateStatus.Deactivated;
+        if (!vendor.EmailVerified) return GateStatus.Unverified;
+        if (!vendor.OnboardingCompleted) return GateStatus.UnfinishedOnboarding;
+        return GateStatus.Allowed;
+    }
+
+    /// <summary>
+    /// Gate-reply throttle. Verified vendors never reach this (they are past
+    /// the gate); everyone else gets at most one guiding reply per window so
+    /// a spam loop or a chatty autoresponder cannot turn the open gate into a
+    /// reply storm. First contact always replies.
+    /// </summary>
+    private static bool ShouldSendGateReply(string phone, DateTimeOffset now)
+    {
+        var last = _lastGateReplyAt.GetOrAdd(phone, DateTimeOffset.MinValue);
+        if (now - last < GateReplyThrottle) return false;
+        _lastGateReplyAt[phone] = now;
+        return true;
     }
 
     private async Task HandleBackStepAsync(

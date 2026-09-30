@@ -1037,19 +1037,20 @@ public class ConversationRouterTests
     }
 
     [Fact]
-    public async Task Gate_UnknownPhone_StaysSilent_AndNoState()
+    public async Task Gate_UnknownPhone_RepliesWithSignupPointer_AndNoState()
     {
         _parser.NextIntent = new ChatIntent(ChatIntentKind.Greeting, null, null);
 
         var handled = await _router.RouteAsync("08019990001", "Hi", null, CancellationToken.None);
 
         Assert.True(handled);
-        Assert.Empty(_sender.Sent);
+        Assert.Contains("verified vendors", _sender.LastBody);
+        Assert.Contains("signup", _sender.LastBody);
         Assert.False(_states.Store.ContainsKey("08019990001"));
     }
 
     [Fact]
-    public async Task Gate_UnverifiedVendor_StaysSilent()
+    public async Task Gate_UnverifiedVendor_RepliesWithVerifyPointer()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -1061,11 +1062,12 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990002", "Hi", null, CancellationToken.None);
 
-        Assert.Empty(_sender.Sent);
+        Assert.Contains("verify your email", _sender.LastBody);
+        Assert.Contains("step=verify", _sender.LastBody);
     }
 
     [Fact]
-    public async Task Gate_DeactivatedVendor_StaysSilent()
+    public async Task Gate_DeactivatedVendor_RepliesPausedNoticeOnly()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -1078,11 +1080,12 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990003", "Hi", null, CancellationToken.None);
 
-        Assert.Empty(_sender.Sent);
+        Assert.Contains("paused", _sender.LastBody);
+        Assert.DoesNotContain("signup", _sender.LastBody);
     }
 
     [Fact]
-    public async Task Gate_UnonboardedVendor_StaysSilent()
+    public async Task Gate_UnonboardedVendor_RepliesWithPayoutPointer()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -1094,7 +1097,28 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990004", "1", null, CancellationToken.None);
 
-        Assert.Empty(_sender.Sent);
+        Assert.Contains("payout", _sender.LastBody);
+        Assert.Contains("step=payout", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Gate_RepeatInsideWindow_StaysSilent_ThenRepliesAfter()
+    {
+        // The throttle is per sender: the second message inside 10 minutes
+        // gets nothing, but the gate still answers afterwards. Verified users
+        // never meet the throttle - they are past the gate entirely.
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Greeting, null, null);
+
+        await _router.RouteAsync("08019990005", "Hi", null, CancellationToken.None);
+        Assert.Contains("verified vendors", _sender.LastBody);
+        var firstCount = _sender.Sent.Count;
+
+        await _router.RouteAsync("08019990005", "hello??", null, CancellationToken.None);
+        Assert.Equal(firstCount, _sender.Sent.Count);
+
+        // A different sender is unaffected by the first sender's window.
+        await _router.RouteAsync("08019990006", "Hi", null, CancellationToken.None);
+        Assert.Contains("verified vendors", _sender.LastBody);
     }
 
     [Fact]
