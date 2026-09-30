@@ -52,7 +52,7 @@ public class DeliveryFlowTests : IDisposable
     {
         public List<(long Amount, string Recipient)> Transfers { get; } = new();
         public bool RefundSucceeds { get; set; } = true;
-        public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(string email, long amountKobo, Guid orderId, CancellationToken ct)
+        public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(string email, long amountKobo, Guid orderId, CancellationToken ct, string? callbackUrl = null)
             => Task.FromResult(("ref", "https://pay.test"));
         public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct) => Task.FromResult(true);
         public Task<string?> CreateRecipientAsync(string accountNumber, string bankCode, string name, CancellationToken ct)
@@ -189,7 +189,8 @@ public class DeliveryFlowTests : IDisposable
         await _orders.AddAsync(order, CancellationToken.None);
         await _orders.SaveAsync(CancellationToken.None);
         var handler = new ConfirmDeliveryCommandHandler(
-            _orders, _db, _otp, _paystack, Notifier(), _mapper);
+            _orders, _db, _otp, _paystack, Notifier(), _mapper,
+            NullLogger<ConfirmDeliveryCommandHandler>.Instance);
 
         var result = await handler.Handle(
             new ConfirmDeliveryCommand(Guid.NewGuid(), "0803", order.Id, "123456"), CancellationToken.None);
@@ -211,7 +212,8 @@ public class DeliveryFlowTests : IDisposable
         await _orders.AddAsync(order, CancellationToken.None);
         await _orders.SaveAsync(CancellationToken.None);
         var handler = new ConfirmDeliveryCommandHandler(
-            _orders, _db, _otp, _paystack, Notifier(), _mapper);
+            _orders, _db, _otp, _paystack, Notifier(), _mapper,
+            NullLogger<ConfirmDeliveryCommandHandler>.Instance);
 
         var result = await handler.Handle(
             new ConfirmDeliveryCommand(Guid.NewGuid(), "08039999999", order.Id, "123456"), CancellationToken.None);

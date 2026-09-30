@@ -23,17 +23,31 @@ public class ConversationRouter
     private readonly BankDirectory _banks;
     private readonly IPaystackClient _paystack;
     private readonly ILogger<ConversationRouter> _logger;
+    private readonly string _frontendBaseUrl;
+
+    /// <summary>
+    /// Gate-reply throttle: one guiding reply per sender per window. Verified
+    /// vendors never meet it (they are past the gate); it exists only so an
+    /// autoresponder loop or a spammer cannot turn the open gate into a
+    /// reply storm. Excess inbound is still audit-logged upstream and 2xx'd.
+    /// Static so it holds across scoped router instances; single-instance
+    /// noted, acceptable at this volume.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _lastGateReplyAt = new();
+    private static readonly TimeSpan GateReplyThrottle = TimeSpan.FromMinutes(10);
 
     public ConversationRouter(
         IConversationRepository states, IVendorRepository vendors, IOrderRepository orders,
         IGroqParser parser, IWhatsAppSender sender, IMediator mediator,
         ISanitizer sanitizer, BankDirectory banks,
-        IPaystackClient paystack, ILogger<ConversationRouter> logger)
+        IPaystackClient paystack, ILogger<ConversationRouter> logger,
+        Microsoft.Extensions.Configuration.IConfiguration? config = null)
     {
         _states = states; _vendors = vendors; _orders = orders;
         _parser = parser; _sender = sender; _mediator = mediator;
         _sanitizer = sanitizer; _banks = banks;
         _paystack = paystack; _logger = logger;
+        _frontendBaseUrl = (config?["Frontend:BaseUrl"] ?? "").TrimEnd('/');
     }
 
     public async Task<bool> RouteAsync(string rawPhone, string body, string? replyJid, CancellationToken ct)
@@ -43,12 +57,22 @@ public class ConversationRouter
         var text = (body ?? "").Trim();
         if (string.IsNullOrEmpty(text)) return false;
 
-        // Bot access gate: verified + onboarded vendors only.
-        // Everyone else (buyers replying, strangers, deactivated) gets
-        // SILENCE: inbound is audit-logged upstream, OpenWA gets its 2xx,
-        // and no state is created. Buyers are served via notifications only.
-        if (!await IsBotUserAsync(phone, ct))
+        // Bot access gate: verified + active + onboarded vendors pass. Everyone
+        // else gets a guiding reply instead of silence - but no state, no menu,
+        // no capabilities. Throttled per sender so the open gate cannot become
+        // a reply storm; excess inbound is audit-logged upstream as before.
+        var gate = await GetGateStatusAsync(phone, ct);
+        if (gate != GateStatus.Allowed)
+        {
+            if (ShouldSendGateReply(phone, DateTimeOffset.UtcNow))
+            {
+                var origin = string.IsNullOrWhiteSpace(_frontendBaseUrl)
+                    ? "https://instasafe-six.vercel.app"
+                    : _frontendBaseUrl;
+                await SendWithTimeoutAsync(replyTo, ConversationTexts.GateMessage(gate, origin));
+            }
             return true;
+        }
 
         var state = await _states.GetByPhoneAsync(phone, ct);
         if (state is null)
@@ -623,9 +647,57 @@ public class ConversationRouter
                 state.Step, ct);
             return;
         }
+
+        // One-message shortcut: "0123456789 GTBank" carries both halves.
+        // If the remainder names a real bank, skip the bank question entirely.
+        if (TrySplitAccountAndBank(text, out _, out var bankText) && bankText.Length > 0)
+        {
+            var both = await MatchBankAsync(bankText, ct);
+            if (both is not null)
+            {
+                draft = draft with { DriverAccountNumber = _sanitizer.Clean(digits, 20) };
+                await ResolveAndConfirmDriverBankAsync(state, phone, replyTo, draft, both, ct);
+                return;
+            }
+        }
+
         draft = draft with { DriverAccountNumber = _sanitizer.Clean(digits, 20) };
         await ReplyAndSaveAsync(state, phone, replyTo, ConversationTexts.AskDriverBankName,
             Domain.Entities.ConversationStep.DraftDriverBankName, ct, draft);
+    }
+
+    /// <summary>
+    /// Splits a combined "account + bank" message ("0123456789 GTBank") into
+    /// its halves. Returns false unless there are 10+ digits AND leftover
+    /// bank text - otherwise the normal single-field path handles it.
+    /// </summary>
+    private static bool TrySplitAccountAndBank(string text, out string account, out string bankText)
+    {
+        account = new string((text ?? "").Where(char.IsDigit).ToArray());
+        bankText = new string((text ?? "").Where(c => !char.IsDigit(c)).ToArray());
+        bankText = System.Text.RegularExpressions.Regex.Replace(bankText, @"\s+", " ").Trim(
+            ' ', '-', '(', ')', '.', ',');
+        if (account.Length < 10 || bankText.Length < 2)
+        {
+            account = "";
+            bankText = "";
+            return false;
+        }
+        return true;
+    }
+
+    private async Task<BankInfo?> MatchBankAsync(string text, CancellationToken ct)
+    {
+        try
+        {
+            var banks = await _banks.GetBanksAsync(ct);
+            return BankDirectory.Match(text, banks);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Bank match failed");
+            return null;
+        }
     }
 
     private async Task HandleBuyerEmailStepAsync(
@@ -649,16 +721,15 @@ public class ConversationRouter
     private async Task HandleDriverBankNameStepAsync(
         Domain.Entities.ConversationState state, string phone, string replyTo, string text, OrderDraft draft, CancellationToken ct)
     {
-        BankInfo? bank;
-        try
+        var bank = await MatchBankAsync(text, ct);
+
+        // The vendor may have resent both halves in one message
+        // ("0123456789 GTBank") after a failed verification - take them.
+        if (bank is null && TrySplitAccountAndBank(text, out var acct, out var bankText))
         {
-            var banks = await _banks.GetBanksAsync(ct);
-            bank = BankDirectory.Match(text, banks);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Bank match failed");
-            bank = null;
+            bank = await MatchBankAsync(bankText, ct);
+            if (bank is not null)
+                draft = draft with { DriverAccountNumber = _sanitizer.Clean(acct, 20) };
         }
 
         if (bank is null)
@@ -672,6 +743,18 @@ public class ConversationRouter
             return;
         }
 
+        await ResolveAndConfirmDriverBankAsync(state, phone, replyTo, draft, bank, ct);
+    }
+
+    /// <summary>
+    /// Verifies the draft's account number against the bank and shows the
+    /// holder name for confirmation. Shared by the guided bank step and the
+    /// one-message account+bank shortcut so both get the identical check.
+    /// </summary>
+    private async Task ResolveAndConfirmDriverBankAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo,
+        OrderDraft draft, BankInfo bank, CancellationToken ct)
+    {
         InstaSafe.Application.Common.Interfaces.AccountResolveResult resolved;
         try
         {
@@ -708,7 +791,7 @@ public class ConversationRouter
             }
             await ReplyAndSaveAsync(state, phone, replyTo,
                 $"I couldn't verify account {draft.DriverAccountNumber} at {bank.Name}. " +
-                "Please resend the driver account number, or CANCEL to stop.",
+                "Resend the account number, or send account and bank together (e.g. 0123456789 GTBank), or CANCEL to stop.",
                 Domain.Entities.ConversationStep.DraftDriverAccount, ct,
                 draft with { DriverBankCode = "", DriverBankName = "" });
             return;
@@ -906,6 +989,15 @@ public class ConversationRouter
             return;
         }
 
+        // A phone number here means "find this customer's orders" - matched
+        // against the vendor's OWN orders only, so one vendor can never
+        // enumerate another's customers by guessing numbers.
+        if (PhoneNormalizer.LooksLikePhone(text))
+        {
+            await ReplyCustomerPhoneOrdersAsync(state, phone, replyTo, text.Trim(), ct);
+            return;
+        }
+
         ChatIntent intent;
         try
         {
@@ -960,6 +1052,46 @@ public class ConversationRouter
         return order;
     }
 
+    /// <summary>
+    /// Track by customer phone: "07031602720" and "2347031602720" find the
+    /// same orders, because both sides go through PhoneNormalizer. One match
+    /// shows full details immediately; several show a compact list with codes
+    /// to paste. Scoped to the vendor's own orders - never global.
+    /// </summary>
+    private async Task ReplyCustomerPhoneOrdersAsync(
+        Domain.Entities.ConversationState state, string phone, string replyTo, string rawPhone, CancellationToken ct)
+    {
+        var want = PhoneNormalizer.Normalize(rawPhone);
+        var mine = await _orders.ListByVendorAsync(Guid.Empty, phone, 1, 100, ct);
+        var matches = mine
+            .Where(o => PhoneNormalizer.Normalize(o.CustomerPhone) == want)
+            .OrderByDescending(o => o.CreatedAt)
+            .ToList();
+
+        if (matches.Count == 0)
+        {
+            await ReplyAndSaveAsync(state, phone, replyTo,
+                $"No orders found for {rawPhone.Trim()}. Check the number, paste an order reference, or type MENU.",
+                state.Step, ct);
+            return;
+        }
+        if (matches.Count == 1)
+        {
+            await SendTrackFoundAsync(state, phone, replyTo, matches[0], ct);
+            return;
+        }
+        var lines = matches.Select((o, i) =>
+        {
+            var num = !string.IsNullOrWhiteSpace(o.OrderNumber) ? o.OrderNumber
+                : o.PaystackReference ?? o.Id.ToString();
+            return $"{i + 1}. {o.CustomerName} — {num} — {o.Status} — ₦{o.AmountKobo / 100:N0}";
+        });
+        await ReplyAndSaveAsync(state, phone, replyTo,
+            $"{matches.Count} orders for {rawPhone.Trim()}:\n" + string.Join("\n", lines) +
+            "\nPaste a reference for full details, or type MENU.",
+            state.Step, ct);
+    }
+
     private async Task SendTrackFoundAsync(
         Domain.Entities.ConversationState state, string phone, string replyTo,
         Domain.Entities.Order order, CancellationToken ct)
@@ -996,13 +1128,28 @@ public class ConversationRouter
     /// Bot access gate. Vendors (verified + onboarded + active) may chat;
     /// everyone else is served through one-way notifications only.
     /// </summary>
-    private async Task<bool> IsBotUserAsync(string phone, CancellationToken ct)
+    private async Task<GateStatus> GetGateStatusAsync(string phone, CancellationToken ct)
     {
         var vendor = await _vendors.GetByPhoneAsync(phone, ct);
-        return vendor is not null
-            && vendor.EmailVerified
-            && vendor.IsActive
-            && vendor.OnboardingCompleted;
+        if (vendor is null) return GateStatus.Unknown;
+        if (!vendor.IsActive) return GateStatus.Deactivated;
+        if (!vendor.EmailVerified) return GateStatus.Unverified;
+        if (!vendor.OnboardingCompleted) return GateStatus.UnfinishedOnboarding;
+        return GateStatus.Allowed;
+    }
+
+    /// <summary>
+    /// Gate-reply throttle. Verified vendors never reach this (they are past
+    /// the gate); everyone else gets at most one guiding reply per window so
+    /// a spam loop or a chatty autoresponder cannot turn the open gate into a
+    /// reply storm. First contact always replies.
+    /// </summary>
+    private static bool ShouldSendGateReply(string phone, DateTimeOffset now)
+    {
+        var last = _lastGateReplyAt.GetOrAdd(phone, DateTimeOffset.MinValue);
+        if (now - last < GateReplyThrottle) return false;
+        _lastGateReplyAt[phone] = now;
+        return true;
     }
 
     private async Task HandleBackStepAsync(

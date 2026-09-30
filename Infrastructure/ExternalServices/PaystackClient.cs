@@ -34,9 +34,14 @@ public class PaystackClient : IPaystackClient
     }
 
     public async Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
-        string email, long amountKobo, Guid orderId, CancellationToken ct)
+        string email, long amountKobo, Guid orderId, CancellationToken ct,
+        string? callbackUrl = null)
     {
-        var body = new { email, amount = amountKobo, metadata = new { order_id = orderId }, callback_url = (string?)null };
+        // callback_url is where Paystack sends the buyer after payment. Null
+        // keeps Paystack's default success page; a track URL lands them on
+        // their live tracker (which may briefly show AwaitingPayment until the
+        // webhook confirms - the page already renders that state).
+        var body = new { email, amount = amountKobo, metadata = new { order_id = orderId }, callback_url = callbackUrl };
         var res = await _http.PostAsJsonAsync("/transaction/initialize", body, ct);
         res.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
@@ -179,42 +184,34 @@ public class PaystackClient : IPaystackClient
 
     public async Task<List<(string Name, string Slug, string Code)>> ListAllBanksAsync(CancellationToken ct)
     {
-        // Full Nigerian bank list (payout dropdowns). /bank ignores `page`;
-        // it is a cursor API (use_cursor=true, then follow meta.next).
-        // Dedupe by code as a guard against repeated pages.
-        var all = new List<(string Name, string Slug, string Code)>();
-        string? cursor = null;
-        for (var i = 0; i < 5; i++)
+        // Full Nigerian bank list (payout dropdowns, WhatsApp bank matching).
+        // Paystack ignores perPage as a cap here: one call returns everything
+        // (~280 rows). Do NOT use cursor mode - its page sizes vary, and the
+        // old "short page means last page" heuristic silently truncated the
+        // list to ~98 banks by stopping after page 1. Dedupe by code as a
+        // guard against repeated rows.
+        var res = await _http.GetAsync("/bank?country=nigeria&perPage=100", ct);
+        if (!res.IsSuccessStatusCode) return new();
+        try
         {
-            var url = "/bank?country=nigeria&perPage=100&use_cursor=true"
-                + (cursor is null ? "" : $"&next={Uri.EscapeDataString(cursor)}");
-            var res = await _http.GetAsync(url, ct);
-            if (!res.IsSuccessStatusCode) break;
-            try
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+            var all = new List<(string Name, string Slug, string Code)>();
+            foreach (var b in doc.RootElement.GetProperty("data").EnumerateArray())
             {
-                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
-                var root = doc.RootElement;
-                var batch = root.GetProperty("data").EnumerateArray()
-                    .Select(b => (
-                        Name: b.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
-                        Slug: b.TryGetProperty("slug", out var s) ? s.GetString() ?? "" : "",
-                        Code: b.TryGetProperty("code", out var c) ? c.GetString() ?? "" : ""))
-                    .Where(b => !string.IsNullOrEmpty(b.Name) && !string.IsNullOrEmpty(b.Code))
-                    .ToList();
-                foreach (var b in batch)
-                    if (!all.Any(x => x.Code == b.Code)) all.Add(b);
-                cursor = root.TryGetProperty("meta", out var m)
-                    && m.TryGetProperty("next", out var nx)
-                    && nx.ValueKind == JsonValueKind.String
-                    ? nx.GetString() : null;
-                if (string.IsNullOrEmpty(cursor) || batch.Count < 100) break;
+                var bank = (
+                    Name: b.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                    Slug: b.TryGetProperty("slug", out var s) ? s.GetString() ?? "" : "",
+                    Code: b.TryGetProperty("code", out var c) ? c.GetString() ?? "" : "");
+                if (!string.IsNullOrEmpty(bank.Name) && !string.IsNullOrEmpty(bank.Code)
+                    && !all.Any(x => x.Code == bank.Code))
+                    all.Add(bank);
             }
-            catch
-            {
-                break;
-            }
+            return all;
         }
-        return all;
+        catch
+        {
+            return new();
+        }
     }
 
     public async Task<AccountResolveResult> ResolveAccountAsync(

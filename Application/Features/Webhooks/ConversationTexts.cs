@@ -1,5 +1,19 @@
 namespace InstaSafe.Application.Features.Webhooks;
 
+/// <summary>
+/// Which side of the bot gate a sender falls on. Allowed means a verified,
+/// active, fully-onboarded vendor - everyone else gets a guiding reply but no
+/// access. Evaluated from a single vendor lookup.
+/// </summary>
+public enum GateStatus
+{
+    Allowed,
+    Unknown,
+    Unverified,
+    UnfinishedOnboarding,
+    Deactivated
+}
+
 public static class ConversationTexts
 {
     public const string Welcome =
@@ -25,6 +39,29 @@ public static class ConversationTexts
 
     public const string ProgressSaved =
         "I've saved your progress — pick it up anytime with 4. Continue below.";
+
+    /// <summary>
+    /// Gate replies: what a sender hears when they cannot use the bot.
+    /// Verified vendors never see these - they are past the gate. Everyone
+    /// else gets guidance instead of silence, but no menu, no capabilities,
+    /// and no state. Deactivated stays a dead end.
+    /// </summary>
+    public static string GateMessage(GateStatus status, string origin) => status switch
+    {
+        GateStatus.Unverified =>
+            "Almost there — verify your email to unlock the bot.\n" +
+            $"Your code was sent at signup; enter it at {origin}/signup?step=verify, then message Hi.",
+        GateStatus.UnfinishedOnboarding =>
+            "One step left — add your payout bank to unlock the bot.\n" +
+            $"Finish setup at {origin}/signup?step=payout, then message Hi and I'll take it from there.",
+        GateStatus.Deactivated =>
+            "This account is paused, so the bot can't serve it. Contact support to reactivate.",
+        _ =>
+            "Hi — this line is for InstaSafe sellers, and only verified vendors get full access here.\n" +
+            "Bought something? Your payment link, code, and delivery updates arrive on this number " +
+            "automatically — nothing to do.\n" +
+            $"Selling? Create your account at {origin}/signup, then message Hi.",
+    };
 
     public const string NoDrafts =
         "You have no unfinished orders. Reply 1 to create a new escrow link.";

@@ -173,7 +173,8 @@ public class ConversationRouterTests
         };
         public string? HolderName { get; set; } = "Musa Rider";
         public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
-            string email, long amountKobo, Guid orderId, CancellationToken ct)
+            string email, long amountKobo, Guid orderId, CancellationToken ct,
+            string? callbackUrl = null)
             => Task.FromResult(("ref", "https://pay.test"));
         public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct)
             => Task.FromResult(true);
@@ -727,6 +728,101 @@ public class ConversationRouterTests
     }
 
     [Fact]
+    public async Task TrackStep_CustomerPhone070_FindsOrder()
+    {
+        // 070... and 234... are the same number after normalization, both when
+        // typed and when stored.
+        const string phone = "08010000066";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-666666", VendorPhone = norm, CustomerName = "Chidi",
+            CustomerPhone = "2347031602720", DeliveryAddress = "Lekki",
+            AmountKobo = 4500000, Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "07031602720");
+
+        Assert.Contains("IS-666666", _sender.LastBody);
+        Assert.Contains("Held", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task TrackStep_CustomerPhone234_FindsSameOrder()
+    {
+        const string phone = "08010000067";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-777777", VendorPhone = norm, CustomerName = "Chidi",
+            CustomerPhone = "07031602720", DeliveryAddress = "Lekki",
+            AmountKobo = 4500000, Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "2347031602720");
+
+        Assert.Contains("IS-777777", _sender.LastBody);
+        Assert.Equal(ConversationStep.Idle, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task TrackStep_CustomerPhone_OtherVendorsOrder_StaysHidden()
+    {
+        // Phone lookup is scoped to the vendor's own orders: guessing a number
+        // must never surface another vendor's customer.
+        const string phone = "08010000068";
+        SeedVendor(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-888888", VendorPhone = "2348099999999", CustomerName = "Stranger",
+            CustomerPhone = "07031602720", DeliveryAddress = "Z", AmountKobo = 300000,
+            Status = OrderStatus.Held
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "07031602720");
+
+        Assert.Contains("No orders found", _sender.LastBody);
+        Assert.DoesNotContain("IS-888888", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task TrackStep_CustomerPhone_MultipleMatches_ListsThem()
+    {
+        const string phone = "08010000069";
+        SeedVendor(phone);
+        var norm = InstaSafe.Application.Common.Helpers.PhoneNormalizer.Normalize(phone);
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-AAAAAA", VendorPhone = norm, CustomerName = "Chidi",
+            CustomerPhone = "07031602720", DeliveryAddress = "Lekki",
+            AmountKobo = 100000, Status = OrderStatus.Held
+        });
+        _orders.Orders.Add(new Order
+        {
+            OrderNumber = "IS-BBBBBB", VendorPhone = norm, CustomerName = "Chidi",
+            CustomerPhone = "07031602720", DeliveryAddress = "Ikoyi",
+            AmountKobo = 200000, Status = OrderStatus.Released
+        });
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Unknown, null, null);
+        await Send(phone, "2");
+
+        await Send(phone, "07031602720");
+
+        Assert.Contains("2 orders", _sender.LastBody);
+        Assert.Contains("IS-AAAAAA", _sender.LastBody);
+        Assert.Contains("IS-BBBBBB", _sender.LastBody);
+    }
+
+    [Fact]
     public async Task Menu_ListOrdersIntent_Lists()
     {
         const string phone = "08010000062";
@@ -941,19 +1037,20 @@ public class ConversationRouterTests
     }
 
     [Fact]
-    public async Task Gate_UnknownPhone_StaysSilent_AndNoState()
+    public async Task Gate_UnknownPhone_RepliesWithSignupPointer_AndNoState()
     {
         _parser.NextIntent = new ChatIntent(ChatIntentKind.Greeting, null, null);
 
         var handled = await _router.RouteAsync("08019990001", "Hi", null, CancellationToken.None);
 
         Assert.True(handled);
-        Assert.Empty(_sender.Sent);
+        Assert.Contains("verified vendors", _sender.LastBody);
+        Assert.Contains("signup", _sender.LastBody);
         Assert.False(_states.Store.ContainsKey("08019990001"));
     }
 
     [Fact]
-    public async Task Gate_UnverifiedVendor_StaysSilent()
+    public async Task Gate_UnverifiedVendor_RepliesWithVerifyPointer()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -965,11 +1062,12 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990002", "Hi", null, CancellationToken.None);
 
-        Assert.Empty(_sender.Sent);
+        Assert.Contains("verify your email", _sender.LastBody);
+        Assert.Contains("step=verify", _sender.LastBody);
     }
 
     [Fact]
-    public async Task Gate_DeactivatedVendor_StaysSilent()
+    public async Task Gate_DeactivatedVendor_RepliesPausedNoticeOnly()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -982,11 +1080,12 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990003", "Hi", null, CancellationToken.None);
 
-        Assert.Empty(_sender.Sent);
+        Assert.Contains("paused", _sender.LastBody);
+        Assert.DoesNotContain("signup", _sender.LastBody);
     }
 
     [Fact]
-    public async Task Gate_UnonboardedVendor_StaysSilent()
+    public async Task Gate_UnonboardedVendor_RepliesWithPayoutPointer()
     {
         _vendors.Vendors.Add(new Vendor
         {
@@ -998,7 +1097,28 @@ public class ConversationRouterTests
 
         await _router.RouteAsync("08019990004", "1", null, CancellationToken.None);
 
-        Assert.Empty(_sender.Sent);
+        Assert.Contains("payout", _sender.LastBody);
+        Assert.Contains("step=payout", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task Gate_RepeatInsideWindow_StaysSilent_ThenRepliesAfter()
+    {
+        // The throttle is per sender: the second message inside 10 minutes
+        // gets nothing, but the gate still answers afterwards. Verified users
+        // never meet the throttle - they are past the gate entirely.
+        _parser.NextIntent = new ChatIntent(ChatIntentKind.Greeting, null, null);
+
+        await _router.RouteAsync("08019990005", "Hi", null, CancellationToken.None);
+        Assert.Contains("verified vendors", _sender.LastBody);
+        var firstCount = _sender.Sent.Count;
+
+        await _router.RouteAsync("08019990005", "hello??", null, CancellationToken.None);
+        Assert.Equal(firstCount, _sender.Sent.Count);
+
+        // A different sender is unaffected by the first sender's window.
+        await _router.RouteAsync("08019990006", "Hi", null, CancellationToken.None);
+        Assert.Contains("verified vendors", _sender.LastBody);
     }
 
     [Fact]
@@ -1032,6 +1152,50 @@ public class ConversationRouterTests
         await Send(phone, "1");
         await Send(phone, "5000");
         Assert.Equal(ConversationStep.DraftDriverPhone, State(phone).Step);
+    }
+
+    private async Task WalkToDriverAccountStep(string phone)
+    {
+        await WalkToDriverPhoneStep(phone);
+        await Send(phone, "08055556666");
+        Assert.Equal(ConversationStep.DraftDriverAccount, State(phone).Step);
+    }
+
+    [Fact]
+    public async Task DriverBank_OneMessage_AccountAndBank_ResolvesDirectly()
+    {
+        // The vendor sends both halves in one message instead of answering
+        // the two prompts separately. Holder name still comes back for
+        // confirmation - the shortcut skips questions, never the check.
+        const string phone = "08010000075";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverAccountStep(phone);
+
+        await Send(phone, "0123456789 GTBank");
+
+        Assert.Equal(ConversationStep.DraftDriverConfirm, State(phone).Step);
+        Assert.Contains("Musa Rider", _sender.LastBody);
+        Assert.Contains("Guaranty Trust Bank", _sender.LastBody);
+    }
+
+    [Fact]
+    public async Task DriverBank_WrongBank_ThenOneMessage_Recovers()
+    {
+        const string phone = "08010000076";
+        _parser.NextParsed = new ParsedOrder("", "", "",
+            new List<ParsedItem> { new("Sneakers", 2, 22500) }, 50000);
+        await WalkToDriverAccountStep(phone);
+        await Send(phone, "0123456789");
+        Assert.Equal(ConversationStep.DraftDriverBankName, State(phone).Step);
+
+        await Send(phone, "Bank of Nowhere");
+        Assert.Equal(ConversationStep.DraftDriverBankName, State(phone).Step);
+
+        await Send(phone, "0123456789 GTBank");
+
+        Assert.Equal(ConversationStep.DraftDriverConfirm, State(phone).Step);
+        Assert.Contains("Musa Rider", _sender.LastBody);
     }
 
     [Fact]

@@ -73,9 +73,14 @@ public class DriverAssignmentNotifyTests : IDisposable
 
     private sealed class FakePaystack : IPaystackClient
     {
+        public string? LastCallbackUrl { get; private set; } = "unset";
         public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
-            string email, long amountKobo, Guid orderId, CancellationToken ct)
-            => Task.FromResult(("ref_test", "https://pay.test/x"));
+            string email, long amountKobo, Guid orderId, CancellationToken ct,
+            string? callbackUrl = null)
+        {
+            LastCallbackUrl = callbackUrl;
+            return Task.FromResult(("ref_test", "https://pay.test/x"));
+        }
         public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct) => Task.FromResult(true);
         public Task<string?> CreateRecipientAsync(string accountNumber, string bankCode, string name, CancellationToken ct)
             => Task.FromResult<string?>("RCP_TEST");
@@ -251,5 +256,63 @@ public class DriverAssignmentNotifyTests : IDisposable
         Assert.Equal(OrderStatus.AwaitingPayment, result.Value!.Status);
         // The regression this suite exists for.
         Assert.Equal(0, wa.AssignmentCount);
+    }
+
+    [Fact]
+    public async Task CreateOrder_PassesTrackCallback_WhenFrontendConfigured()
+    {
+        var wa = new RecordingSender();
+        var handler = new CreateOrderCommandHandler(
+            Orders(), new FakeVendors(), new FakeDrivers(), _paystack,
+            new PassSanitizer(), Notifier(wa), _mapper,
+            new MapConfig(new Dictionary<string, string>
+                { ["Frontend:BaseUrl"] = "https://app.test/" }));
+
+        var result = await handler.Handle(DispatchCmd(), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            $"https://app.test/track/{result.Value!.OrderNumber}",
+            _paystack.LastCallbackUrl);
+    }
+
+    [Fact]
+    public async Task CreateOrder_OmitsCallback_WhenFrontendUnconfigured()
+    {
+        var wa = new RecordingSender();
+        var handler = new CreateOrderCommandHandler(
+            Orders(), new FakeVendors(), new FakeDrivers(), _paystack,
+            new PassSanitizer(), Notifier(wa), _mapper);
+
+        var result = await handler.Handle(DispatchCmd(), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Null(_paystack.LastCallbackUrl);
+    }
+
+    private static CreateOrderCommand DispatchCmd() => new(
+        VendorPhone: "08010000000",
+        CustomerName: "Chidi",
+        CustomerPhone: "08087654321",
+        DeliveryAddress: "Lekki Phase 1",
+        Items: [new OrderItemInput("Sneakers", 2, 22_500)],
+        AmountNgn: 45_000,
+        BuyerEmail: "buyer@example.com",
+        Fulfillment: FulfillmentType.Dispatch,
+        DeliveryFeeNgn: 5_000,
+        DriverPhone: DriverPhone);
+
+    private sealed class MapConfig : Microsoft.Extensions.Configuration.IConfiguration
+    {
+        private readonly Dictionary<string, string> _values;
+        public MapConfig(Dictionary<string, string> values) => _values = values;
+        public string? this[string key]
+        {
+            get => _values.TryGetValue(key, out var v) ? v : null;
+            set { }
+        }
+        public IEnumerable<Microsoft.Extensions.Configuration.IConfigurationSection> GetChildren() => [];
+        public Microsoft.Extensions.Primitives.IChangeToken GetReloadToken() => throw new NotImplementedException();
+        public Microsoft.Extensions.Configuration.IConfigurationSection GetSection(string key) => throw new NotImplementedException();
     }
 }

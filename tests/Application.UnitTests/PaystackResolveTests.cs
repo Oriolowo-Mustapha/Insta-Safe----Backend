@@ -112,16 +112,78 @@ public class PaystackResolveTests
         Assert.Empty(banks);
     }
 
+    [Fact]
+    public async Task InitializeTransaction_SendsCallbackUrl_WhenProvided()
+    {
+        var bodies = new List<string?>();
+        var handler = new CaptureHandler(bodies,
+            (HttpStatusCode.OK,
+             """{"status":true,"data":{"reference":"ref-1","authorization_url":"https://pay.test/x"}}"""));
+        var client = new PaystackClient(new HttpClient(handler),
+            new FakeConfig(), NullLogger<PaystackClient>.Instance);
+
+        var (reference, _) = await client.InitializeTransactionAsync(
+            "buyer@example.com", 5000000, Guid.NewGuid(), CancellationToken.None,
+            "https://app.test/track/IS-8K4N2Q");
+
+        Assert.Equal("ref-1", reference);
+        Assert.Single(bodies);
+        Assert.Contains("https://app.test/track/IS-8K4N2Q", bodies[0]);
+        Assert.Contains("callback_url", bodies[0]);
+    }
+
+    [Fact]
+    public async Task InitializeTransaction_OmitsCallbackUrl_WhenAbsent()
+    {
+        var bodies = new List<string?>();
+        var handler = new CaptureHandler(bodies,
+            (HttpStatusCode.OK,
+             """{"status":true,"data":{"reference":"ref-1","authorization_url":"https://pay.test/x"}}"""));
+        var client = new PaystackClient(new HttpClient(handler),
+            new FakeConfig(), NullLogger<PaystackClient>.Instance);
+
+        await client.InitializeTransactionAsync(
+            "buyer@example.com", 5000000, Guid.NewGuid(), CancellationToken.None);
+
+        Assert.Single(bodies);
+        Assert.Contains("\"callback_url\":null", bodies[0]);
+    }
+
+    private sealed class CaptureHandler : HttpMessageHandler
+    {
+        private readonly List<string?> _bodies;
+        private readonly Queue<(HttpStatusCode, string)> _responses;
+        public CaptureHandler(List<string?> bodies, params (HttpStatusCode, string)[] responses)
+        {
+            _bodies = bodies;
+            _responses = new Queue<(HttpStatusCode, string)>(responses);
+        }
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct)
+        {
+            _bodies.Add(request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(ct));
+            var (status, json) = _responses.Dequeue();
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+        }
+    }
+
     private sealed class QueueHandler : HttpMessageHandler
     {
         private readonly Queue<(HttpStatusCode, string)> _responses;
         public int Calls { get; private set; }
+        public string LastUrl { get; private set; } = "";
         public QueueHandler(IEnumerable<(HttpStatusCode, string)> responses)
             => _responses = new Queue<(HttpStatusCode, string)>(responses);
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
         {
             Calls++;
+            LastUrl = request.RequestUri?.PathAndQuery ?? "";
             var (status, json) = _responses.Dequeue();
             return Task.FromResult(new HttpResponseMessage(status)
             {
@@ -138,19 +200,16 @@ public class PaystackResolveTests
             new FakeConfig(), NullLogger<PaystackClient>.Instance), handler);
     }
 
-    private static string BankPage(IEnumerable<(string Name, string Slug, string Code)> banks, string? next) =>
+    private static string BankList(params (string Name, string Slug, string Code)[] banks) =>
         """{"status":true,"data":[""" +
         string.Join(",", banks.Select(b =>
             $$"""{"name":"{{b.Name}}","slug":"{{b.Slug}}","code":"{{b.Code}}"}""")) +
-        "],\"meta\":{\"next\":" + (next is null ? "null" : $"\"{next}\"") + "}}";
-
-    private static string BankPage(params (string Name, string Slug, string Code)[] banks) =>
-        BankPage(banks, null);
+        "]}";
 
     [Fact]
-    public async Task ListAllBanks_StopsWhenNoCursor()
+    public async Task ListAllBanks_ReturnsFullList_InOneCall()
     {
-        var (client, handler) = Paged((HttpStatusCode.OK, BankPage(
+        var (client, handler) = Paged((HttpStatusCode.OK, BankList(
             ("Abbey Mortgage Bank", "abbey-mortgage-bank", "801"),
             ("Coronation Merchant Bank", "coronation-merchant-bank", "559"))));
 
@@ -159,20 +218,31 @@ public class PaystackResolveTests
         Assert.Equal(2, banks.Count);
         Assert.Equal("801", banks[0].Code);
         Assert.Equal(1, handler.Calls);
+        Assert.Contains("perPage=100", handler.LastUrl);
+        Assert.DoesNotContain("use_cursor", handler.LastUrl);
     }
 
     [Fact]
-    public async Task ListAllBanks_FollowsCursor_AndDedupes()
+    public async Task ListAllBanks_DedupesRepeatedCodes()
     {
-        var full = Enumerable.Range(1, 100).Select(i =>
-            ($"Bank {i}", $"bank-{i}", $"{i:000}")).ToArray();
-        var (client, handler) = Paged(
-            (HttpStatusCode.OK, BankPage(full, "cursor-2")),
-            (HttpStatusCode.OK, BankPage([("Last Bank", "last-bank", "999"), ("Bank 1", "bank-1", "001")], null)));
+        var (client, handler) = Paged((HttpStatusCode.OK, BankList(
+            ("Wema Bank", "wema-bank", "035"),
+            ("Wema Bank", "wema-bank", "035"),
+            ("GTBank", "guaranty-trust-bank", "058"))));
 
         var banks = await client.ListAllBanksAsync(CancellationToken.None);
 
-        Assert.Equal(101, banks.Count);
-        Assert.Equal(2, handler.Calls);
+        Assert.Equal(2, banks.Count);
+        Assert.Equal(1, handler.Calls);
+    }
+
+    [Fact]
+    public async Task ListAllBanks_FailedResponse_ReturnsEmpty()
+    {
+        var (client, _) = Paged((HttpStatusCode.BadGateway, "bad gateway"));
+
+        var banks = await client.ListAllBanksAsync(CancellationToken.None);
+
+        Assert.Empty(banks);
     }
 }

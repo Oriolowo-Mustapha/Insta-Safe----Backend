@@ -2,6 +2,7 @@ using InstaSafe.Application.Common.Interfaces;
 using InstaSafe.Application.Common.Models;
 using InstaSafe.Application.Features.Admin.Commands.ForceRelease;
 using InstaSafe.Application.Features.Admin.Commands.RetryPayout;
+using InstaSafe.Application.Features.Admin.Commands.RetryRiderPayout;
 using InstaSafe.Application.Features.Admin.Commands.SetDispatcherActive;
 using InstaSafe.Application.Features.Admin.DTOs;
 using InstaSafe.Application.Features.Admin.Queries.GetAdminStats;
@@ -196,6 +197,21 @@ public class AdminController : ControllerBase
         if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
         await AuditAsync("order.retry-payout", "order", id.ToString(), null, ct);
         return Ok(ApiResponse<OrderDto>.FromResult(result, "Payout re-executed to vendor."));
+    }
+
+    /// <summary>
+    /// Re-runs a rider fee transfer that failed at delivery confirmation.
+    /// The handover already happened - only the money is retried. Refuses
+    /// when a rider transfer reference already exists (never pay twice) or
+    /// when the rider has no recipient.
+    /// </summary>
+    [HttpPost("orders/{id:guid}/retry-rider-payout")]
+    public async Task<ActionResult<ApiResponse<OrderDto>>> RetryRiderPayout(Guid id, CancellationToken ct)
+    {
+        var result = await _mediator.Send(new RetryRiderPayoutCommand(id), ct);
+        if (!result.IsSuccess) return BadRequest(ApiResponse<OrderDto>.FromResult(result));
+        await AuditAsync("order.retry-rider-payout", "order", id.ToString(), null, ct);
+        return Ok(ApiResponse<OrderDto>.FromResult(result, "Rider fee re-executed."));
     }
 
     [HttpGet("chats")]

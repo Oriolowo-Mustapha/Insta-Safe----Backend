@@ -10,6 +10,26 @@ Frontend origin (production): `https://instasafe-six.vercel.app`
 This section is rewritten each time the contract changes. It lists only what is
 current — older deltas are deleted, not appended to.
 
+### Rider fee failures are now loud + recoverable
+
+A delivery could complete while the rider fee transfer failed, and nothing
+recorded it. Now a failed fee writes an Error log plus a `RiderPayoutFailed`
+outbox entry (visible in `GET /api/admin/outbox` RecentErrors), and the admin
+can re-run it via `POST /api/admin/orders/{id}/retry-rider-payout` (no body).
+Returns `409` unless the order is `Delivered` with a fee, no rider transfer
+reference yet, and a rider recipient. Same unknown-outcome rule as
+`retry-payout`: on "outcome is unknown", check the Paystack transfers list
+for `InstaSafe rider fee {orderId}` before retrying.
+
+### Web order creation now requires rider-bank verification
+
+A rider order must carry `riderBankCheck`: `verified:{bankCode}:{account}`
+(holder name confirmed via `GET /api/payments/banks/resolve`) or
+`acknowledged:{bankCode}:{account}` (verification down, vendor took
+responsibility) - matching the submitted values exactly, otherwise `400`.
+The create form resolves the holder name and shows it for confirmation
+before submit.
+
 ### ⚠️ BREAKING: two fulfilment types, and the vendor now picks
 
 `fulfillment` is a **number** and the vendor states which flow they are in:
@@ -107,7 +127,7 @@ passing the raw API string through leaks the state machine to buyers.
 1. **`/track/{orderNumber}` is a required frontend route.** The backend puts a live link in the buyer's payment-link WhatsApp, bank-transfer WhatsApp, status emails, **and the dispatcher's assignment WhatsApp**. The dispatcher link is sent on **payment confirmation**, matching the `Held`/`Delivered` filter on `GET /api/dispatch/assigned`.
 2. `GET /api/admin/orders` accepts `?q=` (order number or Paystack reference).
 3. `POST /api/admin/orders/{id}/retry-payout` is new (admin only).
-4. `GET /api/payments/banks` returns the complete Nigerian bank list in one call — call once and cache.
+4. `GET /api/payments/banks` returns the complete Nigerian bank list in one call (~280 banks, one Paystack request, no paging) — call once and cache.
 5. `OrderDto` always includes `orderNumber` (`IS-XXXXXX`).
 
 No route, HTTP method, envelope, status code, or field name changed. The breaking
@@ -313,11 +333,10 @@ All vendor JWT, own id only (else `403`):
 - `buyerEmail` must be real — receipts + status mails go there. `customerPhone` must be a WhatsApp number — the payment link goes there by chat + mail.
 - Returns `orderNumber` (`IS-XXXXXX`, show it everywhere), `paystackAuthUrl` (card/link payment) + `paystackReference`.
 
-### Bank-transfer rail (dedicated virtual account)
-- `POST /api/orders/{id}/request-bank-transfer` (vendor JWT, own order) `{ "preferredBank": "wema-bank" }` (optional; omit for default). Idempotent — repeat calls return the same account. Only from `AwaitingPayment`/`Draft`.
-- Returns `payVirtualAccountNumber/Bank/Name`. Buyer transfers the **exact** total; confirmation is automatic via webhook.
-- `GET /api/payments/banks` **(Public)** → full Nigerian bank list `[{ name, slug, code }]` for dropdowns and valid `preferredBank` slugs. Add `?transferOnly=true` for the short DVA-receivable subset.
-- `GET /api/payments/banks/resolve?accountNumber=...&bankCode=...` **(Public)** → `{ accountNumber, bankCode, accountName }`. Wrong details → `400` with Paystack's reason included. Service down/rate-limited → **`503`** — show "couldn't verify, proceed carefully" instead of "wrong account". (Note: Paystack test mode allows ~3 live resolves/day; use code `001` or live keys for volume testing.)
+### Paying by checkout (the only buyer rail)
+- The buyer always pays through `paystackAuthUrl` (card, transfer, USSD — whatever Paystack checkout offers). There is no separate bank-transfer rail: `POST /api/orders/{id}/request-bank-transfer` and `?transferOnly=true` exist in the API but are **not part of this product** — do not build them.
+- `GET /api/payments/banks` **(Public)** → full Nigerian bank list `[{ name, slug, code }]` for the payout and rider-bank dropdowns.
+- `GET /api/payments/banks/resolve?accountNumber=...&bankCode=...` **(Public)** → `{ accountNumber, bankCode, accountName }`. Wrong details → `400` with Paystack's reason included. Service down/rate-limited → **`503`** — show "couldn't verify, proceed carefully" instead of "wrong account".
 
 ### Vendor order views (JWT, own orders only)
 - `GET /api/orders?page=&pageSize=` — my orders, newest first
@@ -386,13 +405,13 @@ Both dispatch endpoints return **`DispatchOrderDto`**, not `OrderDto` — see [O
 ## 6. End-to-end flows for the UI
 
 **Vendor onboarding:** register → verify-email → payout → login → dashboard. Gate on the two flags.
-**Sell:** create order, picking `fulfillment` → show buyer `paystackAuthUrl` (card) and/or `request-bank-transfer` details → buyer pays → `Held` (buyer gets OTP) → **rider confirms** → `Delivered` (24h window) → auto-release or dispute → resolve. A self-delivery order instead goes `Held` → the buyer releases it from the track page with their own code.
-**Track page (public):** route `/track/{orderNumber}` → `by-reference/{orderNumber}` for header facts + `by-reference/{orderNumber}/timeline` for the stepper. **Dispute** always; the verify panel only for `Held` self-delivery orders. No satisfaction button. Also linked from the dispatcher's assignment WhatsApp.
+**Sell:** create order, picking `fulfillment` → show buyer `paystackAuthUrl` → buyer pays → `Held` (buyer gets OTP) → **rider confirms** → `Delivered` (24h window) → auto-release or dispute → resolve. A self-delivery order instead goes `Held` → the buyer releases it from the track page with their own code.
+**Track page (public):** route `/track/{orderNumber}` → `by-reference/{orderNumber}` for header facts + `by-reference/{orderNumber}/timeline` for the stepper. **Dispute** always; the verify panel only for `Held` self-delivery orders. No satisfaction button. Also linked from the dispatcher's assignment WhatsApp. After a checkout payment Paystack redirects the buyer straight here (per-order callback_url); the order may still read AwaitingPayment for a few seconds until the webhook confirms - render that as confirming, not an error.
 **Driver app:** request-code → verify-code → assigned list → confirm with buyer OTP.
 
 ## 7. WhatsApp bot (for context, not frontend work)
-**Vendor-only.** The bot answers verified + onboarded vendors and no one else: unknown/unverified/deactivated/unfinished-onboarding senders get **silence** (logged to the audit trail, never replied to). Buyers are served purely through notifications (payment link, OTP, delivered, released, refunded) + the public track page — a buyer replying to the bot gets no answer by design. (If a vendor changes SIM, fix via `PUT /api/vendors/{id}/phone` on web.)
-Menu: create link (guided: customer → phone → buyer email → address → items → amount → **how it reaches the buyer (1 dispatch rider / 2 self-delivery)** → fee → driver phone/account/**bank name** → holder confirm → order confirm; the self-delivery path skips every driver question), `2. Track an order` (paste the reference, or reply LIST for a numbered list of your orders and pick one), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), help. `BACK`/`EDIT` steps back to the previous answered question; `MENU`/`CANCEL` preserve the draft as a ticket. If an answer fails validation the bot first checks whether you were correcting an earlier answer (e.g. fixing the address while being asked for the rider's number) and applies it; otherwise it re-asks. Phone answers must actually be digits — sentences are rejected, not stored. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
+**Vendor-gated, not vendor-silent.** The bot gives full access to verified + active + onboarded vendors. Everyone else gets a guiding reply instead of silence - strangers/buyers get pointed to signup (with bought-something guidance), unverified to email verification, unfinished to payout setup, deactivated to support - but no state, no menu, no capabilities. Gate replies are throttled to one per sender per 10 minutes so the open gate cannot become a reply storm; verified vendors never meet the throttle. Buyers are still served primarily through notifications (payment link, OTP, delivered, released, refunded) + the public track page. (If a vendor changes SIM, fix via `PUT /api/vendors/{id}/phone` on web.)
+Menu: create link (guided: customer → phone → buyer email → address → items → amount → **how it reaches the buyer (1 dispatch rider / 2 self-delivery)** → fee → driver phone/account/**bank name** → holder confirm → order confirm; the self-delivery path skips every driver question; account and bank may arrive in one message ("0123456789 GTBank")), `2. Track an order` (paste the reference, or reply LIST for a numbered list of your orders and pick one), `4. Continue unfinished order` (resumable saved drafts with summaries, discard via `D2`), help. `BACK`/`EDIT` steps back to the previous answered question; `MENU`/`CANCEL` preserve the draft as a ticket. If an answer fails validation the bot first checks whether you were correcting an earlier answer (e.g. fixing the address while being asked for the rider's number) and applies it; otherwise it re-asks. Phone answers must actually be digits — sentences are rejected, not stored. Order creation errors always reply instead of silence. Chat is audited server-side; no frontend action needed.
 
 ---
 

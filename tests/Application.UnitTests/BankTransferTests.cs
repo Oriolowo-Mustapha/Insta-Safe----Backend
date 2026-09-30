@@ -23,7 +23,8 @@ public class BankTransferTests : IDisposable
         public bool VerifyOk { get; set; } = true;
         public int CustomerCalls { get; private set; }
         public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
-            string email, long amountKobo, Guid orderId, CancellationToken ct)
+            string email, long amountKobo, Guid orderId, CancellationToken ct,
+            string? callbackUrl = null)
             => Task.FromResult(("ref", "https://pay.test"));
         public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct)
             => Task.FromResult(VerifyOk);

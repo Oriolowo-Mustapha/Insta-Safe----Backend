@@ -21,7 +21,8 @@ public class RetryPayoutTests : IDisposable
         public Exception? ThrowOnTransfer { get; set; }
 
         public Task<(string Reference, string AuthUrl)> InitializeTransactionAsync(
-            string email, long amountKobo, Guid orderId, CancellationToken ct)
+            string email, long amountKobo, Guid orderId, CancellationToken ct,
+            string? callbackUrl = null)
             => Task.FromResult(("ref", "https://pay.test"));
         public Task<bool> VerifyTransactionAsync(string reference, CancellationToken ct) => Task.FromResult(true);
         public Task<string?> CreateRecipientAsync(string accountNumber, string bankCode, string name, CancellationToken ct)
